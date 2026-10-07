@@ -124,6 +124,7 @@ class BotApp:
         self._last_push = (0.0, "")
         self.manager_chat_ok = False
         self._handlers_added = False
+        self._chat_seen = set()
 
     # ---------- settings / i18n ----------
     def s(self, k, d=None):
@@ -189,6 +190,19 @@ class BotApp:
             return False
         off = self.s("modules_off", []) or []
         return name in off
+
+    # ---------- chat allow-list for AUTO features (commands unaffected) ----------
+    def auto_chat_ok(self, chat_id):
+        """all | whitelist | blacklist — controls where AFK/autoreply/rules/antispam act."""
+        try:
+            mode = self.s("auto_chats_mode", "all") or "all"
+            if mode == "all":
+                return True
+            lst = self.s("auto_chats_list", []) or []
+            hit = int(chat_id) in [int(x) for x in lst]
+            return hit if mode == "whitelist" else (not hit)
+        except Exception:
+            return True
 
     # ---------- bot-sent tracking (so AFK auto-clear ignores our own replies) ----------
     def mark_bot_sent(self, msg_id):
@@ -327,6 +341,9 @@ class BotApp:
             out = bool(msg.out)
             if chat_id:
                 self.stats_bump(chat_id, "out" if out else "in")
+                if chat_id not in self._chat_seen:
+                    self._chat_seen.add(chat_id)
+                    asyncio.ensure_future(self._remember_chat(chat_id, event))
             if out:
                 if self.is_bot_sent(msg.id):
                     return
@@ -348,6 +365,24 @@ class BotApp:
                         log.exception("incoming hook %s", hook.__name__)
         except Exception:
             log.exception("on_new_message")
+
+    async def _remember_chat(self, chat_id, event):
+        """Save a human-readable chat title once per shift (for .topchats)."""
+        try:
+            if self.db.setting(f"chat_title_{chat_id}"):
+                return
+            chat = await event.get_chat()
+            if chat is None:
+                return
+            title = (getattr(chat, "title", None)
+                     or getattr(chat, "first_name", None)
+                     or getattr(chat, "username", None)
+                     or str(chat_id))
+            if title and title != str(chat_id):
+                self.db.set_setting(f"chat_title_{chat_id}", str(title)[:64])
+                self.db.commit()
+        except Exception:
+            pass
 
     async def on_message_edited(self, event):
         try:
