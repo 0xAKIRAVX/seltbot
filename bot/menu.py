@@ -67,6 +67,7 @@ ACTIONS = {
     "ck_fmt2":    ("clock", "text {jdate} ｜ {hhm}:{mmm}"),
     "ck_fmt3":    ("clock", "text {h12}:{mm} {ampm}"),
     "ck_fmt4":    ("clock", "text {name} ｜ {hhm}:{mmm}"),
+    "ck_nodate":  ("clock", "nodate"),
     "ck_dg_bold":   ("clock", "digits bold"),
     "ck_dg_fa":     ("clock", "digits fa"),
     "ck_dg_mono":   ("clock", "digits mono"),
@@ -135,6 +136,7 @@ ACTION_TOASTS = {
     "ck_on": "✅ ساعت روشن شد", "ck_off": "⏹ ساعت خاموش شد",
     "ck_fmt1": "✅ قالب ساده اعمال شد", "ck_fmt2": "✅ شمسی + ساعت اعمال شد",
     "ck_fmt3": "✅ قالب ۱۲ساعته اعمال شد", "ck_fmt4": "✅ قالب با اسم اعمال شد",
+    "ck_nodate": "🗑 تاریخ حذف شد — فقط ساعت می‌مونه",
     "ck_dg_bold": "✅ فونت بولد اعمال شد", "ck_dg_fa": "✅ فونت فارسی اعمال شد",
     "ck_dg_mono": "✅ فونت مونو اعمال شد", "ck_dg_double": "✅ فونت توخالی اعمال شد",
     "ck_dg_serif": "✅ فونت کلاسیک اعمال شد", "ck_dg_full": "✅ فونت عریض اعمال شد",
@@ -172,6 +174,16 @@ def _clock_info(app):
         return DEFAULT_TEMPLATE, DEFAULT_DIGITS, DIGIT_STYLES
     except Exception:
         return "｜ {hhm}:{mmm}", "mono", {}
+
+
+def _clock_has_date(app):
+    """v2.6 — does the current clock template render a date part?"""
+    try:
+        from .plugins.clock import has_date_tokens
+        default_tpl, _, _ = _clock_info(app)
+        return has_date_tokens(app.s("clock_template", default_tpl) or default_tpl)
+    except Exception:
+        return False
 
 
 def _ai_line(app):
@@ -251,6 +263,8 @@ def page_clock(app):
         f"<code>{esc(full)}</code>",
         f"🔠 فونت ارقام: <b>{esc(dg_label)}</b>",
         f"🧩 قالب: <code>{esc(tpl)}</code>",
+        ("📅 تاریخ: ✅ کنار ساعت می‌شینه" if _clock_has_date(app)
+         else "📅 تاریخ: ⛔ نیست — فقط ساعت می‌شینه"),
         (f"📞 کالیبره با گوشی: <b>{off:+d} ثانیه</b>" if off
          else "📞 کالیبره با گوشی: بدون انحراف"),
         f"{'✅' if app.s('clock_bio_on') else '⛔'} ساعت در بیو",
@@ -266,6 +280,7 @@ def page_clock(app):
          B("📅 شمسی + ساعت", "ck_fmt2")],
         [B("🌗 ۱۲ساعته", "ck_fmt3"),
          B("👤 با اسم اصلی", "ck_fmt4")],
+        [B("🗑 حذف تاریخ (فقط ساعت بمونه)", "ck_nodate")],
         [B("🔢 بولد 𝟭𝟮:𝟯𝟬", "ck_dg_bold"),
          B("🔢 فارسی ۱۲:۳۰", "ck_dg_fa")],
         [B("🔢 مونو 𝟷𝟸:𝟹𝟶", "ck_dg_mono"),
