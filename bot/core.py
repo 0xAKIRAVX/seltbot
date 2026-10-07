@@ -1,6 +1,7 @@
 """SeltBot core: command registry, module registry, BotApp, event routing."""
 import asyncio
 import datetime
+import html as _htmlmod
 import json
 import logging
 import re
@@ -24,6 +25,30 @@ MODULES = {}           # name -> ModuleInfo
 INCOMING_HOOKS = []    # async (app, event) -> bool consumed
 OUTGOING_HOOKS = []    # async (app, event) -> bool consumed
 PROTECTED_MODULES = {"helpmod", "settingsmod", "security", "pluginctl"}
+
+
+# ---------------------------------------------------------------- md2html
+# v2.5 — manager-bot messages go out as parse_mode=HTML. The plugins are
+# written in Telethon-flavored markdown (**bold**, __italic__, `code`,
+# ~~strike~~, [text](url)) which Bot-API legacy Markdown does NOT render
+# (** showed up as literal asterisks — the ugly output the owner reported).
+# This converts that subset to safe HTML; everything else is escaped.
+_RE_STRIKE = re.compile(r"~~(.+?)~~", re.S)
+_RE_BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)
+_RE_ITAL = re.compile(r"__(.+?)__", re.S)
+_RE_CODE = re.compile(r"`([^`\n]+)`")
+_RE_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+|tg://[^\s)]+)\)")
+
+
+def md2html(text):
+    t = _htmlmod.escape(str(text if text is not None else ""), quote=False)
+    # links first (before other markers could eat the brackets)
+    t = _RE_LINK.sub(r'<a href="\2">\1</a>', t)
+    t = _RE_STRIKE.sub(r"<s>\1</s>", t)
+    t = _RE_ITAL.sub(r"<i>\1</i>", t)
+    t = _RE_BOLD.sub(r"<b>\1</b>", t)
+    t = _RE_CODE.sub(r"<code>\1</code>", t)
+    return t
 
 
 class Cmd:
@@ -82,7 +107,7 @@ class BotReply:
         text = str(text)[:4000]
         r = await bot_api(self.app.http, self.app.manager_token, "editMessageText",
                           {"chat_id": self.chat_id, "message_id": self.message_id,
-                           "text": text, "parse_mode": "Markdown"})
+                           "text": md2html(text), "parse_mode": "HTML"})
         if not r.get("ok"):
             desc = str(r.get("description") or "").lower()
             if "parse" in desc or "entities" in desc:
@@ -271,12 +296,18 @@ class BotApp:
         except Exception:
             log.exception("send_saved failed")
 
-    async def manager_send(self, chat_id, text, parse_mode="Markdown"):
+    async def manager_send(self, chat_id, text, parse_mode="HTML"):
+        """Send via the manager bot. v2.5: default parse_mode is now HTML with
+        md2html() converting the Telethon-style markdown the plugins are
+        written in (**bold**, `code`, [text](url)) — before, Bot-API legacy
+        Markdown made every **bold** show up as literal asterisks."""
         if not self.manager_token:
             return None
         payload = {"chat_id": chat_id, "text": text[:4000]}
         if parse_mode:
             payload["parse_mode"] = parse_mode
+            if parse_mode == "HTML":
+                payload["text"] = md2html(text)[:4000]
         try:
             r = await bot_api(self.http, self.manager_token, "sendMessage", payload)
             if r.get("ok"):
