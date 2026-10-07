@@ -85,3 +85,53 @@ async def blocked_cmd(app, ev, arg):
     rows = app.db.blocked()
     await ev.reply("🚫 بلاک‌شده‌ها:\n" + ("\n".join(f"• `{u}`" for u in rows)
                                           if rows else "— خالی —"))
+
+
+@command("autochats", "security",
+         "mode all|wl|bl | add [آیدی] | del [آیدی] | list",
+         "سفید/سیاه‌لیست چت‌ها برای قابلیت‌های خودکار", "Chat allow/deny list",
+         bot_ok=True)
+async def autochats_cmd(app, ev, arg):
+    """کجاها AFK/پاسخ خودکار/قوانین/آنتی‌اسپم فعال باشن.
+    mode all = همه (پیش‌فرض) | wl = فقط لیست | bl = همه جز لیست.
+    بدون آیدی → همین چتی که توش هستی."""
+    parts = arg.split(None, 1)
+    sub = (parts[0].lower() if parts else "list")
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    mode = app.s("auto_chats_mode", "all") or "all"
+    lst = app.s("auto_chats_list", []) or []
+    if sub == "mode":
+        v = {"all": "all", "wl": "whitelist", "whitelist": "whitelist",
+             "bl": "blacklist", "blacklist": "blacklist"}.get(rest.lower())
+        if not v:
+            await ev.reply("❌ `.autochats mode all|wl|bl`\n"
+                           "all = همهٔ چت‌ها | wl = فقط چت‌های لیست | bl = همه جز لیست")
+            return
+        app.sets("auto_chats_mode", v)
+        name = {"all": "همهٔ چت‌ها", "whitelist": "فقط چت‌های لیست (سفید)",
+                "blacklist": "همه جز لیست (سیاه)"}[v]
+        await ev.reply(f"✅ قابلیت‌های خودکار در: {name}")
+    elif sub == "add":
+        cid = int(rest) if (rest.lstrip("-").isdigit() and rest) else ev.chat_id
+        if cid in lst:
+            await ev.reply("از قبل توی لیسته.")
+            return
+        lst.append(cid)
+        app.sets("auto_chats_list", lst)
+        where = app.s(f"chat_title_{cid}", None) or str(cid)
+        await ev.reply(f"✅ «{where}» به لیست اضافه شد ({len(lst)} مورد).")
+    elif sub == "del":
+        cid = int(rest) if (rest.lstrip("-").isdigit() and rest) else ev.chat_id
+        if cid not in lst:
+            await ev.reply("توی لیست نبود.")
+            return
+        lst.remove(cid)
+        app.sets("auto_chats_list", lst)
+        await ev.reply(f"🗑 حذف شد ({len(lst)} مورد مونده).")
+    else:
+        mode_fa = {"all": "همهٔ چت‌ها", "whitelist": "فقط سفید‌لیست",
+                   "blacklist": "همه جز سیاه‌لیست"}.get(mode, mode)
+        rows = "\n".join(
+            f"• `{c}` — {app.s(f'chat_title_{c}', None) or '—'}" for c in lst[:20]) or "—"
+        await ev.reply(f"🧭 قابلیت‌های خودکار (AFK/پاسخ/قوانین/آنتی‌اسپم): {mode_fa}\n"
+                       f"چت‌های لیست:\n{rows}")
