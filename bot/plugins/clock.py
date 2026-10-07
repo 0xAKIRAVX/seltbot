@@ -37,6 +37,41 @@ def _digit_fn(style):
     return ent[1] if ent else (lambda s: s)
 
 
+# v2.6 — «حذف تاریخ» (owner: "یه گزینه حذف تاریخ بزار که بتونم از پروفایلم
+# تاریخ رو پاک کنم"). These are every token (and icon) that renders a DATE
+# part; the rest of the template (clock, dividers, {name}) must survive.
+_DATE_TOKENS = ("{jdate}", "{jdatefa}", "{date}", "{jy}", "{jm}", "{jd}",
+                "{jMon}", "{jWD}", "{year}", "{month}", "{day}",
+                "{Mon}", "{WD}")
+_DATE_EMOJI = ("📅", "🗓", "📆")
+
+
+def has_date_tokens(tpl):
+    """True if this clock template renders any date part."""
+    tpl = tpl or ""
+    return any(t in tpl for t in _DATE_TOKENS) or any(e in tpl for e in _DATE_EMOJI)
+
+
+def _strip_date(tpl):
+    """v2.6 — remove every date token (+ date icon) from a clock template
+    and tidy what the date left behind, so «{jdate} ｜ {hhm}:{mmm}» becomes
+    the clean «｜ {hhm}:{mmm}». A single leading «｜» divider is KEPT (that's
+    the canonical «name ｜ clock» look); dangling «-»/«—» stubs at either
+    end are dropped; doubled dividers collapse to one. Idempotent."""
+    out = tpl or ""
+    for t in _DATE_TOKENS:
+        out = out.replace(t, "")
+    for e in _DATE_EMOJI:
+        out = out.replace(e, "")
+    out = re.sub(r"[ \t]{2,}", " ", out)                 # collapse space runs
+    out = re.sub(r"\s*[｜|]\s*[｜|]\s*", " ｜ ", out)     # «｜ ｜» → «｜»
+    out = re.sub(r"(?<=\S)\s*[｜|—–\-·/]+\s*$", "", out)  # trailing stub
+    out = re.sub(r"^[\s]*[—–\-·/]+\s*", "", out)          # leading dash stub
+    out = out.strip()
+    out = re.sub(r"^\|", "｜", out)                        # normalize half-width
+    return out
+
+
 def _rng(a, b):
     """regex range 'chr(a)-chr(b)', built from codepoints (typo-proof)."""
     return f"{chr(a)}-{chr(b)}"
@@ -75,7 +110,8 @@ TOKENS_HELP_FA = """🧩 توکن‌های قالب (ارقام همه با فو
 `{WD} {day} {Mon} {year}` → Thursday 7 October 2026
 `{name}` → اسم/بیوی اصلیت
 مثال: `.clock text {jdate} ｜ {hhm}:{mmm}`
-فونت ارقام: `.clock digits` (بولد/فارسی/مونو/توخالی/کلاسیک/عریض/ساده)"""
+فونت ارقام: `.clock digits` (بولد/فارسی/مونو/توخالی/کلاسیک/عریض/ساده)
+حذف تاریخ (فقط ساعت بمونه): `.clock nodate`"""
 
 
 def looks_like_clock(s, app=None):
@@ -367,7 +403,7 @@ def _fmt_ts(app, ts):
     return app.now().fromtimestamp(ts, app.tzinfo).strftime("%H:%M:%S")
 
 
-@command("clock", "clock", "[on/off/text/interval/tz/target/offset/digits/bio/status]",
+@command("clock", "clock", "[on/off/text/nodate/interval/tz/target/offset/digits/bio/status]",
          "ساعت زندهٔ کنار اسم/بیو + تنظیمات", "Live clock in name/bio + settings",
          aliases=("clockname",))
 async def clock_cmd(app, ev, arg):
@@ -401,6 +437,9 @@ async def clock_cmd(app, ev, arg):
         note = await _apply_feedback(app)
         await ev.reply("✅ قالب ساعت ست شد." + note
                        + "\n" + _profile_preview(app))
+    elif sub in ("nodate", "no-date", "dateoff", "date-off", "بدون تاریخ",
+                 "بدون-تاریخ", "حذف تاریخ", "حذف-تاریخ", "حذف"):
+        await _clock_nodate(app, ev)
     elif sub == "interval":
         try:
             v = int(jalali.to_en_digits(rest))
@@ -500,6 +539,38 @@ async def _clock_digits(app, ev, rest):
         lines.append(f"{mark} {fa_label} → `{fn(sample)}`  (`.clock digits {key}`)")
     lines += ["", "از منوی مدیریت هم می‌تونی با دکمه عوضش کنی 🧊"]
     await ev.reply("\n".join(lines))
+
+
+async def _clock_nodate(app, ev):
+    """v2.6 — «حذف تاریخ»: one tap / one command and the profile shows ONLY
+    the clock again. Strips date tokens from the NAME template (always) and
+    from the BIO template too when the bio clock is on; everything else the
+    owner configured (font, 12/24h, {name}, dividers) is preserved."""
+    global _next_bio
+    tpl = app.s("clock_template", DEFAULT_TEMPLATE) or DEFAULT_TEMPLATE
+    had_date = has_date_tokens(tpl)
+    bio_on = app.s("clock_bio_on", False)
+    bio_tpl = (app.s("clock_bio_template", DEFAULT_BIO_TEMPLATE)
+               or DEFAULT_BIO_TEMPLATE) if bio_on else ""
+    bio_had = bool(bio_tpl) and has_date_tokens(bio_tpl)
+
+    if not had_date and not bio_had:
+        await ev.reply("🙂 تاریخی توی ساعتت نیست — الان هم فقط ساعت نشون می‌دی.\n"
+                       + _profile_preview(app))
+        return
+
+    new_tpl = _strip_date(tpl) or DEFAULT_TEMPLATE
+    app.sets("clock_template", new_tpl)
+    if bio_had:
+        app.sets("clock_bio_template", _strip_date(bio_tpl) or DEFAULT_BIO_TEMPLATE)
+        _next_bio = 0          # bio clock loop picks it up on its next wake
+    note = await _apply_feedback(app)
+    msg = ("🗑 تاریخ حذف شد — از این به بعد فقط ساعت کنار اسمت می‌شینه."
+           if had_date else
+           "🗑 تاریخ از ساعتِ بیو حذف شد — فقط ساعت می‌مونه.")
+    hint = ("\nبرای برگردوندن تاریخ هر وقت خواستی: دکمهٔ «📅 شمسی + ساعت» یا "
+            "`.clock text {jdate} ｜ {hhm}:{mmm}`") if had_date else ""
+    await ev.reply(msg + note + "\n" + _profile_preview(app) + hint)
 
 
 async def _clock_bio(app, ev, rest):
