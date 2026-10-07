@@ -6,12 +6,42 @@ EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 MONO_DIGITS = str.maketrans("0123456789", "𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿")
 
 
+# v2.5 — extra Unicode digit fonts for the profile clock (owner asked for a
+# fancier digit font). Codepoints built programmatically so the source stays
+# copy-paste-corruption-proof.
+def _digit_font(base_cp):
+    """str.translate map: '0'-'9' → U+<base_cp>..U+<base_cp+9>."""
+    return {ord("0") + i: base_cp + i for i in range(10)}
+
+
+BOLD_DIGITS = _digit_font(0x1D7EC)    # 𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵  (sans-serif bold)
+DOUBLE_DIGITS = _digit_font(0x1D7D8)  # 𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡  (double-struck / outlined)
+SERIF_DIGITS = _digit_font(0x1D7CE)   # 𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗  (serif bold / classic)
+FULL_DIGITS = _digit_font(0xFF10)     # ０１２３４５６７８９  (fullwidth)
+
+
 def fa_digits(s):
     return str(s).translate(FA_DIGITS)
 
 
 def mono_digits(s):
     return str(s).translate(MONO_DIGITS)
+
+
+def bold_digits(s):
+    return str(s).translate(BOLD_DIGITS)
+
+
+def double_digits(s):
+    return str(s).translate(DOUBLE_DIGITS)
+
+
+def serif_digits(s):
+    return str(s).translate(SERIF_DIGITS)
+
+
+def full_digits(s):
+    return str(s).translate(FULL_DIGITS)
 
 
 def to_en_digits(s):
