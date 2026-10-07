@@ -68,6 +68,8 @@ ACTIONS = {
     "ck_fmt3":    ("clock", "text {h12}:{mm} {ampm}"),
     "ck_fmt4":    ("clock", "text {name} ｜ {hhm}:{mmm}"),
     "ck_nodate":  ("clock", "nodate"),
+    "ck_matrix":  ("clock", "matrix"),
+    "ck_matrix_off": ("clock", "matrix off"),
     "ck_dg_bold":   ("clock", "digits bold"),
     "ck_dg_fa":     ("clock", "digits fa"),
     "ck_dg_mono":   ("clock", "digits mono"),
@@ -137,6 +139,8 @@ ACTION_TOASTS = {
     "ck_fmt1": "✅ قالب ساده اعمال شد", "ck_fmt2": "✅ شمسی + ساعت اعمال شد",
     "ck_fmt3": "✅ قالب ۱۲ساعته اعمال شد", "ck_fmt4": "✅ قالب با اسم اعمال شد",
     "ck_nodate": "🗑 تاریخ حذف شد — فقط ساعت می‌مونه",
+    "ck_matrix": "🌀 ماتریکس روشن شد — هر دقیقه می‌رقصه!",
+    "ck_matrix_off": "🌀 ماتریکس خاموش شد — قالب قبلی برگشت",
     "ck_dg_bold": "✅ فونت بولد اعمال شد", "ck_dg_fa": "✅ فونت فارسی اعمال شد",
     "ck_dg_mono": "✅ فونت مونو اعمال شد", "ck_dg_double": "✅ فونت توخالی اعمال شد",
     "ck_dg_serif": "✅ فونت کلاسیک اعمال شد", "ck_dg_full": "✅ فونت عریض اعمال شد",
@@ -184,6 +188,14 @@ def _clock_has_date(app):
         return has_date_tokens(app.s("clock_template", default_tpl) or default_tpl)
     except Exception:
         return False
+
+
+def _clock_days(app):
+    try:
+        from .plugins.clock import _days_since
+        return _days_since(app, app.now())
+    except Exception:
+        return "—"
 
 
 def _ai_line(app):
@@ -265,6 +277,12 @@ def page_clock(app):
         f"🧩 قالب: <code>{esc(tpl)}</code>",
         ("📅 تاریخ: ✅ کنار ساعت می‌شینه" if _clock_has_date(app)
          else "📅 تاریخ: ⛔ نیست — فقط ساعت می‌شینه"),
+        ("🌀 ماتریکس: ✅ فعال — اسپینر/فونت/نوار هر دقیقه عوض می‌شن"
+         if app.s("clock_matrix_on", False)
+         else "🌀 ماتریکس: ⛔ خاموش — با دکمهٔ پایین متحرکش کن"),
+        (f"📆 شمارش روز: روز {_clock_days(app)} (`.clock since ...`)"
+         if app.s("clock_since", "") else
+         "📆 شمارش روز: ⛔ (`.clock since 1405/7/15`)"),
         (f"📞 کالیبره با گوشی: <b>{off:+d} ثانیه</b>" if off
          else "📞 کالیبره با گوشی: بدون انحراف"),
         f"{'✅' if app.s('clock_bio_on') else '⛔'} ساعت در بیو",
@@ -281,6 +299,8 @@ def page_clock(app):
         [B("🌗 ۱۲ساعته", "ck_fmt3"),
          B("👤 با اسم اصلی", "ck_fmt4")],
         [B("🗑 حذف تاریخ (فقط ساعت بمونه)", "ck_nodate")],
+        [B("🌀 ماتریکس متحرک: " + ("خاموش‌کردن" if app.s("clock_matrix_on", False) else "روشن‌کردن"),
+           "ck_matrix_off" if app.s("clock_matrix_on", False) else "ck_matrix")],
         [B("🔢 بولد 𝟭𝟮:𝟯𝟬", "ck_dg_bold"),
          B("🔢 فارسی ۱۲:۳۰", "ck_dg_fa")],
         [B("🔢 مونو 𝟷𝟸:𝟹𝟶", "ck_dg_mono"),
