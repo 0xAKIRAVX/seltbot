@@ -22,6 +22,9 @@ Commands:
   .watch add @user  add user to online-watch list (or reply to their msg)
   .watch del @user  remove from list
   .watch list       show watched users
+
+v2.3.1: every alert now carries the person's NUMERIC ID (+ @username when
+known) — the user explicitly asked "آیدیشو برام بفرستی" (send me their ID).
 """
 import asyncio
 import logging
@@ -38,7 +41,7 @@ log = logging.getLogger("seltbot.watcher")
 # throttle windows (seconds) per (kind, user_id)
 THROTTLE = {"typing": 300, "read": 60, "online": 900}
 _last = {}          # (kind, uid) → ts
-_names = {}         # uid → display name cache
+_names = {}         # uid → (display_name, username_or_None)
 
 
 def _throttled(kind, uid, now=None):
@@ -68,20 +71,29 @@ def _watch_ids(app):
     return {int(u.get("id")) for u in _watched(app) if u.get("id")}
 
 
-async def _name(app, uid):
+async def _who(app, uid):
+    """(display_name, username_or_None) for a user — cached."""
     if uid in _names:
         return _names[uid]
-    n = app.db.setting(f"chat_title_{uid}")
-    if not n:
-        try:
-            ent = await app.client.get_entity(int(uid))
-            n = (getattr(ent, "first_name", None) or "") + " " + \
-                (getattr(ent, "last_name", None) or "")
-            n = n.strip() or (getattr(ent, "username", None) or f"#{uid}")
-        except Exception:
-            n = f"#{uid}"
-    _names[uid] = str(n)[:48]
+    n, un = app.db.setting(f"chat_title_{uid}"), None
+    try:
+        ent = await app.client.get_entity(int(uid))
+        un = getattr(ent, "username", None) or None
+        if not n:
+            n = ((getattr(ent, "first_name", None) or "") + " " +
+                 (getattr(ent, "last_name", None) or "")).strip() or un or f"#{uid}"
+    except Exception:
+        n = n or f"#{uid}"
+    _names[uid] = (str(n)[:48], un)
     return _names[uid]
+
+
+def _id_line(uid, un):
+    """Explicit identity line — the owner asked for the ID in every alert."""
+    s = f"🆔 آیدی: {uid}"
+    if un:
+        s += f" · @{un}"
+    return s
 
 
 async def _notify(app, text):
@@ -104,16 +116,16 @@ async def _on_raw(app, update):
             uid = int(update.user_id)
             if uid == me_id or _throttled("typing", uid):
                 return
-            n = await _name(app, uid)
-            await _notify(app, f"⌨️ {n} داره بهت پیام خصوصی می‌نویسه…")
+            n, un = await _who(app, uid)
+            await _notify(app, f"⌨️ {n} داره بهت پیام خصوصی می‌نویسه…\n{_id_line(uid, un)}")
             return
 
         if isinstance(update, types.UpdateReadHistoryOutbox):
             uid = _peer_uid(update.peer)
             if uid is None or uid == me_id or _throttled("read", uid):
                 return
-            n = await _name(app, uid)
-            await _notify(app, f"👁 {n} پیام خصوصی‌ت رو خوند ✓")
+            n, un = await _who(app, uid)
+            await _notify(app, f"👁 {n} پیام خصوصی‌ت رو خوند ✓\n{_id_line(uid, un)}")
             return
 
         if isinstance(update, types.UpdateUserStatus):
@@ -124,8 +136,8 @@ async def _on_raw(app, update):
                 return  # only online transitions (less noise)
             if _throttled("online", uid):
                 return
-            n = await _name(app, uid)
-            await _notify(app, f"🟢 {n} آنلاین شد")
+            n, un = await _who(app, uid)
+            await _notify(app, f"🟢 {n} آنلاین شد\n{_id_line(uid, un)}")
             return
     except Exception:
         log.exception("watch on_raw")
@@ -167,6 +179,7 @@ def _status_lines(app):
         "ℹ️ تلگرام «دیدن پروفایل» رو به هیچ رباتی نمی‌ده (حریم خصوصی) —",
         "پس این ماژول نزدیک‌ترین سیگنال‌های واقعی رو بهت می‌ده:",
         "⌨️ تایپ‌کردن برات · 👁 خوندن پیام خصوصی‌ت · 🟢 آنلاین‌شدن لیست تحت نظر",
+        "🆔 تو هر اعلان، آیدی عددی (+ یوزرنیم) هم برات میاد.",
     ]
 
 
@@ -218,7 +231,7 @@ async def watch_cmd(app, ev, arg):
         if any(int(u.get("id")) == uid for u in users):
             await ev.reply("ℹ️ این فرد از قبل تو لیسته.")
             return
-        n = await _name(app, uid)
+        n, _un = await _who(app, uid)
         users.append({"id": uid, "name": n})
         app.sets("watch_users", users)
         await ev.reply(f"✅ {n} به لیست تحت نظر اضافه شد — آنلاین‌شدنش رو خبر می‌دم.")
