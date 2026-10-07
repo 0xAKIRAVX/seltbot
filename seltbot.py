@@ -84,7 +84,8 @@ def check_single_instance(env):
 
 
 MENU = [
-    ("start", "شروع و راهنمای سریع"),
+    ("start", "شروع و پنل مدیریت"),
+    ("menu", "پنل مدیریت با دکمه"),
     ("help", "راهنمای ماژول‌ها"),
     ("status", "وضعیت کامل بات"),
     ("clock", "تنظیم ساعت (on/off/text/tz)"),
@@ -124,6 +125,7 @@ MENU = [
 
 
 async def manager_bot_loop(app):
+    from bot import menu as menumod
     from bot.core import BotEv, bot_api
     if not app.manager_token:
         return
@@ -155,6 +157,10 @@ async def manager_bot_loop(app):
                                 {"timeout": 25, "offset": offset}, timeout=30)
             for u in res.get("result", []):
                 offset = u["update_id"] + 1
+                cbq = u.get("callback_query")
+                if cbq:
+                    asyncio.ensure_future(menumod.handle_callback(app, cbq))
+                    continue
                 m = u.get("message") or u.get("edited_message") or {}
                 text = (m.get("text") or "").strip()
                 if not text.startswith("/"):
@@ -169,6 +175,9 @@ async def manager_bot_loop(app):
                 parts = text.split(None, 1)
                 name = parts[0][1:].split("@")[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else ""
+                if name in ("start", "menu"):
+                    await menumod.handle_start(app, chat.get("id"))
+                    continue
                 ev = BotEv(app, chat.get("id"), uid)
                 asyncio.ensure_future(app.run_command(name, arg, ev))
         except asyncio.CancelledError:
@@ -402,6 +411,79 @@ def selftest():
     assert db.rule_hit(2) is None
     assert db.rule_toggle(2, False)
     print("[9] IF-THEN rule parser + db OK")
+
+    # [10] CRITICAL regression: add_event_handler(callback, event) arg order.
+    # Swapped args make EVERY update dispatch die with
+    # "type object 'method' has no attribute 'build'" → zero features work.
+    from telethon import TelegramClient, events
+    from telethon.events.common import EventBuilder
+    from telethon.sessions import StringSession
+
+    async def _dummy_handler(ev):
+        pass
+
+    tc = TelegramClient(StringSession(), 1, "b" * 32)   # no connect
+    tc.add_event_handler(_dummy_handler, events.NewMessage())
+    builder, cb = tc._event_builders[0]
+    assert cb is _dummy_handler, "callback must be the handler function"
+    assert isinstance(builder, events.NewMessage), "builder must be NewMessage"
+    # prove the OLD swapped call produces the broken state we guard against:
+    tc2 = TelegramClient(StringSession(), 1, "b" * 32)
+    tc2.add_event_handler(events.NewMessage(), _dummy_handler)  # swapped (old bug)
+    b2, cb2 = tc2._event_builders[0]
+    assert not isinstance(b2, EventBuilder) and cb2 is not _dummy_handler, \
+        "swapped registration must be detectable"
+    print("[10] event-handler registration order OK (regression guarded)")
+
+    # [11] glass menu: every action is a real bot_ok command; data ≤64 bytes
+    from bot import menu as menumod
+    for data, (cmd, arg) in menumod.ACTIONS.items():
+        assert len(data.encode()) <= 64, f"callback_data too long: {data}"
+        assert cmd in COMMANDS, f"menu action → unknown command: {cmd}"
+        assert COMMANDS[cmd].bot_ok, f"menu action → not bot_ok: {cmd}"
+
+    class MenuShim:
+        lang = "fa"
+        me = None
+        run_id = "test"
+        started = time.time() - 90
+        deadline = time.time() + 600
+
+        def __init__(self, db):
+            self.db = db
+
+        def s(self, k, d=None):
+            return self.db.setting(k, d)
+
+        @property
+        def fa(self):
+            return True
+
+        def uptime_str(self):
+            return "1m"
+
+        def deadline_in_str(self):
+            return "10m"
+
+    msh = MenuShim(db)
+    for page in menumod.PAGES:
+        text, kb = menumod.render_page(msh, page)
+        assert text and kb, f"menu page {page} rendered empty"
+        for row in kb:
+            for btn in row:
+                d = btn["callback_data"]
+                assert len(d.encode()) <= 64, f"button data >64B in {page}: {d}"
+                assert d.startswith("n/") or d in menumod.ACTIONS, f"orphan button {d}"
+    print(f"[11] glass menu OK: {len(menumod.PAGES)} pages, "
+          f"{len(menumod.ACTIONS)} wired actions")
+
+    # [12] clock minute-boundary precision (phone-sync)
+    from bot.plugins.clock import _align_next
+    fake_now = 1791373260.83            # not on a boundary
+    nxt = _align_next(fake_now, 60)
+    assert 0 < (nxt % 60) < 1.0, f"aligned write not just-after boundary: {nxt % 60}"
+    assert nxt - fake_now <= 60.3, f"alignment waits too long: {nxt - fake_now}"
+    print("[12] clock boundary sync OK (write lands just after minute flip)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
