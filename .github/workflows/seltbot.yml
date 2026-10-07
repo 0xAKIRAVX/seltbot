@@ -51,6 +51,9 @@ jobs:
           MANAGER_BOT_TOKEN: ${{ secrets.MANAGER_BOT_TOKEN }}
           NOTIFY_BOT_TOKEN: ${{ secrets.NOTIFY_BOT_TOKEN }}
           STATE_KEY: ${{ secrets.STATE_KEY }}
+          AI_API_URL: ${{ secrets.AI_API_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_TOKEN: ${{ github.token }}
