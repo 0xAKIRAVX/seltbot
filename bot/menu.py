@@ -70,6 +70,10 @@ ACTIONS = {
     "ai_test":    ("ai", "سلام! یه جمله درباره خودت بگو"),
     "ai_status":  ("aistatus", ""),
     "ai_reset":   ("aireset", ""),
+    # — دیده‌شدن و فعالیت —
+    "wt_on":      ("watch", "on"),
+    "wt_off":     ("watch", "off"),
+    "wt_list":    ("watch", "list"),
     # — آمار —
     "st_stats":   ("stats", ""),
     "st_top":     ("topchats", ""),
@@ -90,7 +94,7 @@ ACTIONS = {
 }
 
 PAGES = ("main", "clock", "afk", "autoreply", "rules", "antispam", "notes",
-         "sched", "ai", "stats", "settings", "health", "help")
+         "sched", "ai", "watch", "stats", "settings", "health", "help")
 
 
 # ---------------------------------------------------------------- helpers
@@ -142,6 +146,7 @@ def page_main(app):
         B("📋 نوت‌ها", "n/notes"),
         B("⏰ یادآورها", "n/sched"),
         B("🧠 هوش مصنوعی", "n/ai"),
+        B("👁 دیده‌شدن‌ها", "n/watch"),
         B("📊 آمار", "n/stats"),
         B("⚙️ تنظیمات", "n/settings"),
         B("🩺 سلامت سیستم", "n/health"),
@@ -333,6 +338,35 @@ def page_ai(app):
     return "\n".join(lines), kb
 
 
+def page_watch(app):
+    try:
+        users = app.s("watch_users", []) or []
+    except Exception:
+        users = []
+    on = app.s("watch_on", True)
+    names = "، ".join(str(u.get("name", f"#{u.get('id')}")) for u in users[:10]) or "—"
+    lines = [
+        "👁 **دیده‌شدن و فعالیت**",
+        "━━━━━━━━━━━━━━━━━━",
+        f"• وضعیت: {'✅ فعال' if on else '⛔ غیرفعال'}",
+        f"• افراد تحت نظر: {len(users)}",
+        f"• لیست: {names}",
+        "",
+        "ℹ️ تلگرام «دیدن پروفایل» رو به هیچ رباتی نمی‌ده (حریم خصوصی)",
+        "— ولی نزدیک‌ترین سیگنال‌های واقعی الان فعاله:",
+        "• ⌨️ کسی که داره بهت پیام خصوصی می‌نویسه",
+        "• 👁 کی پیام خصوصی‌ت رو می‌خونه",
+        "• 🟢 آنلاین‌شدن افراد لیست (افزودن: /watch add @user)",
+    ]
+    kb = [
+        [B("▶️ روشن" if not on else "⏹ خاموش",
+           "wt_off" if on else "wt_on"),
+         B("📋 لیست", "wt_list")],
+        [B("⬅️ منوی اصلی", "n/main")],
+    ]
+    return "\n".join(lines), kb
+
+
 def page_stats(app):
     tot = {r["direction"]: r["s"] for r in (app.db.counters_total() or [])}
     lines = [
@@ -414,8 +448,9 @@ def page_help(app):
 PAGE_BUILDERS = {
     "main": page_main, "clock": page_clock, "afk": page_afk,
     "autoreply": page_autoreply, "rules": page_rules, "antispam": page_antispam,
-    "notes": page_notes, "sched": page_sched, "ai": page_ai, "stats": page_stats,
-    "settings": page_settings, "health": page_health, "help": page_help,
+    "notes": page_notes, "sched": page_sched, "ai": page_ai, "watch": page_watch,
+    "stats": page_stats, "settings": page_settings, "health": page_health,
+    "help": page_help,
 }
 
 
