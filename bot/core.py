@@ -168,7 +168,15 @@ class BotApp:
 
     # ---------- security ----------
     def is_owner(self, uid):
-        return bool(uid) and int(uid) == self.owner_id
+        if not uid:
+            return False
+        uid = int(uid)
+        # the session account itself is ALWAYS the owner — belt & suspenders
+        # in case the OWNER_ID secret is missing/wrong (symptom: total silence
+        # on both .commands and the manager menu = "nothing responds")
+        if self.me is not None and uid == self.me.id:
+            return True
+        return uid == self.owner_id
 
     def is_sudo(self, uid):
         try:
@@ -320,6 +328,8 @@ class BotApp:
                 await ev.reply(self.t("not_allowed"))
             return False
         try:
+            log.info("cmd %s%r from %s", self.s("prefix", ".") if not getattr(ev, "is_bot_ev", False) else "/",
+                     name, ev.sender_id)
             await cmd.fn(self, ev, arg)
             self.db.cmd_bump(name)
         except asyncio.CancelledError:
@@ -446,13 +456,17 @@ class BotApp:
             self.db.set_setting("clock_first_base", self.me.first_name or "")
         if self.db.setting("clock_bio_base") is None:
             self.db.set_setting("clock_bio_base", (getattr(self.me, "about", None) or ""))
-        if not self._handlers_added:
-            # ⚠️ signature: add_event_handler(callback, event) — swapped args kill
-            # ALL event dispatch with "type object 'method' has no attribute 'build'"
-            self.client.add_event_handler(self.on_new_message, events.NewMessage())
-            self.client.add_event_handler(self.on_message_edited,
-                                          events.MessageEdited())
-            self._handlers_added = True
+        # register dispatch handlers on THIS client object. run() creates a
+        # fresh TelegramClient on every call (reconnect path), so a persistent
+        # _handlers_added flag would leave the NEW client with ZERO handlers →
+        # all features silently dead after a hard reconnect. Register always:
+        # a brand-new client starts with an empty handler list, so this cannot
+        # double-register.
+        # ⚠️ signature: add_event_handler(callback, event) — swapped args kill
+        # ALL event dispatch with "type object 'method' has no attribute 'build'"
+        self.client.add_event_handler(self.on_new_message, events.NewMessage())
+        self.client.add_event_handler(self.on_message_edited,
+                                      events.MessageEdited())
         # start plugin background loops
         for name, info in MODULES.items():
             if info.start:
