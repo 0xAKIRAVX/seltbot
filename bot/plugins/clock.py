@@ -103,9 +103,13 @@ def _render_bio(app):
 
 
 def _align_next(now, iv):
+    # Write lands ~0.3s AFTER the minute boundary so the visible change happens
+    # right as the phone's clock flips (epoch is minute-aligned for whole-minute
+    # UTC offsets such as Iran's +3:30). The loop then sleeps precisely until
+    # the next action (see _loop) instead of polling at 1s granularity.
     if iv >= 60 and 60 % iv == 0:
-        return (int(now / iv) + 1) * iv + 1.2
-    return now + iv + 0.5
+        return (int(now / iv) + 1) * iv + 0.3
+    return now + iv + 0.2
 
 
 _task = None
@@ -153,7 +157,10 @@ async def _loop(app):
                 _next_verify = now + 300
                 if app.s("clock_on", True) or app.s("clock_bio_on", False):
                     await app.gov.verify()
-            await asyncio.sleep(1)
+            # sleep until just before the earliest pending action (precise sync)
+            pending = [t for t in (_next_name, _next_bio, _next_verify) if t > now]
+            nxt = min(pending) if pending else now + 5
+            await asyncio.sleep(min(5.0, max(0.05, nxt - now - 0.02)))
         except asyncio.CancelledError:
             raise
         except Exception:
