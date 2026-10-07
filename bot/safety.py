@@ -95,7 +95,17 @@ class ProfileGovernor:
             return (False, 0, "same")
         if not force:
             gap = now - self.last_try.get(target, 0)
-            need = self.effective_interval(target)
+            # v2.5.1 pacing fix: the clock loop wakes at exactly boundary+0.3s,
+            # so consecutive aligned writes land 60s ± ~50ms apart. Using
+            # effective_interval (== 60) as the floor made every other boundary
+            # write get "paced" out (gap 59.97s < 60) → the profile skipped a
+            # full minute. When healthy, the floor must sit strictly BELOW the
+            # aligned cadence (iv ≥ 30s → floor 29s). When degraded (flood
+            # backoff / silent-reset strikes) we keep the cautious wide spacing.
+            if self.healthy():
+                need = max(1.0, self.min_gap() - 1)
+            else:
+                need = self.effective_interval(target)
             if gap < need:
                 return (False, need - gap, "pace")
             if self.budget_left() <= 0:
