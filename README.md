@@ -1,6 +1,8 @@
-# 🤖 SeltBot v2 — سلف‌بات کامل تلگرام
+# 🤖 SeltBot v2.1 — سلف‌بات کامل تلگرام
 
 سلف‌بات ماژولار روی **اکانت خودت** (Telethon userbot) — بدون ترموکس، اجرای ۲۴/۷ روی GitHub Actions، با طراحی **ضدبن**.
+
+**v2.1 جدید:** موتور قوانین اگر-آنگاه + آنتی‌اسپم + ابزار گروه/کانال (کیک/بن/میوت) + خلاصه‌سازی هوشمند + پیشوند/پسوند ساعت + سفید/سیاه‌لیست چت‌ها + رفع باگ فیلترها.
 
 ## 🚀 استفاده (۵ ثانیه)
 
@@ -30,6 +32,47 @@
 ```
 
 توکن‌های قالب: `{hhm} {mmm} {ssm} {hh} {mm} {ss} {h12} {ampm} {jdate} {jy} {jMon} {jWD} {date} {name}` …
+
+پیشوند/پسوند دلخواه (بدون دست‌زدن به قالب):
+```
+.clock prefix 🕐
+.clock suffix ⏳
+```
+
+## 🧩 قوانین اگر-آنگاه (IF-THEN)
+
+هر اتفاقی → واکنش خودکار. ساختار: `.rule add <اگر>:<مقدار> -> <آنگاه>:<مقدار>`
+
+```
+.rule add kw:سلام -> reply:سلام علیکم          ← اگه کلمه‌ای گفته شد
+.rule add re:^\?+ -> reply:واضح‌تر بپرس          ← رجکس
+.rule add from:123456789 -> reply:الان نمی‌تونم  ← پیامِ کاربر خاص
+.rule add media:link -> del                       ← لینک‌ها حذف شن (ادمین)
+.rule add media:sticker -> react:❤️               ← استیکر → ری‌اکشن
+.rule add kw:فوری -> alert:کلمهٔ فوری!            ← هشدار در Saved
+.rule add kw:قرارداد -> note:قرارداد              ← ذخیرهٔ خودکار نوت
+.rules / .rule del 3 / .rule off / .clearrules
+```
+تریگرها: `kw` `re` `from` `chat` `media(any/photo/video/gif/sticker/voice/audio/file/link)`
+اکشن‌ها: `reply` `del` `react` `alert` `fwd` `note` — سقف ساعتی داره (ضدبن: `.set rules_max_per_hour 25`).
+
+## 🛡 آنتی‌اسپم
+
+```
+.antispam on        ← هرکس بیشتر از ۸ پیام در ۱۰ ثانیه بفرسته → حذف + هشدار
+.antispam 12        ← تغییر حد
+.antispam off
+```
+
+## 👥 ابزار گروه و کانال
+
+```
+.kick (ریپلای)  .ban (ریپلای)  .mute 30m  .unmute
+.admins  .members 50
+.leave confirm   ← ترک چت (تأیید می‌خواد)
+.join https://t.me/+hash
+```
+(اکشن‌های مدیریتی فقط جایی که ادمین باشی کار می‌کنن.)
 
 ## 💤 AFK
 
@@ -105,6 +148,9 @@
 .allow @user / .deny @user     ← کاربر مجاز برای دستورات
 .block @user / .unblock / .blocked
 .sudoers
+.autochats mode all|wl|bl      ← قابلیت‌های خودکار کجاها فعال باشن
+.autochats add                 ← همین چت به لیست اضافه شه
+.autochats list
 ```
 همهٔ دستورات فقط برای صاحب اکانت + sudoers اجرا می‌شن. بلاک‌شده‌ها جواب خودکار نمی‌گیرن.
 
@@ -117,10 +163,17 @@
 .notify on / .alert add فوریت
 ```
 
-## 🧠 AI (اختیاری)
+## 🧠 AI + خلاصه‌سازی (اختیاری)
 
-این secret ها رو اضافه کن تا فعال شه: `AI_API_URL` + `AI_API_KEY` (+`AI_MODEL`)
-هر سرویس سازگار با OpenAI. بعد: `.ai سلام` / `.setprompt …` / `.aireset`
+از داخل خود تلگرام (بدون ری‌استارت):
+```
+.set ai_url https://api.openai.com/v1     ← یا OpenRouter/Groq/هر سرویس سازگار
+.set ai_key sk-...
+.set ai_model gpt-4o-mini
+```
+بعد: `.ai سلام` / `.sum` (ریپلای روی متن بلند = خلاصه) / `.tr` (ترجمه با AI) / `.setprompt شخصیت` / `.aistatus`
+
+بدون کلید هم `.sum` کار می‌کنه (خلاصهٔ استخراجی آفلاین) و `.tr` از سرویس رایگان می‌گیره.
 
 ## 🏗 معماری ۲۴/۷ (بدون ترموکس)
 
@@ -157,9 +210,9 @@
 seltbot.py              ← نقطهٔ ورود (--selftest/--once)
 bot/core.py             ← روتینگ دستورات + BotApp
 bot/safety.py           ← فرماندار ضدبن پروفایل
-bot/db.py               ← SQLite (نوت/فیلتر/زمان‌بند/آمار)
+bot/db.py               ← SQLite (نوت/فیلتر/قوانین/زمان‌بند/آمار)
 bot/state_io.py         ← بکاپ رمزنگاری‌شدهٔ وضعیت
 bot/jalali.py           ← تقویم شمسی + ارقام فارسی/مونو
-bot/plugins/*.py        ← ۱۹ ماژول — فایل جدید = ماژول جدید
+bot/plugins/*.py        ← ۲۱ ماژول — فایل جدید = ماژول جدید
 .github/workflows/seltbot.yml
 ```
