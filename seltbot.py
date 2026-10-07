@@ -594,6 +594,48 @@ def selftest():
         and '<a href="tg://user?id=1">زهرا</a>' in h and "&lt;raw&gt;" in h, h
     assert "**" not in h, h
     print("[15] v2.5 OK (7 digit fonts incl. bold default, md2html converter)")
+    # v2.5.1: pacing coin-flip fix — a healthy governor must NOT pace a
+    # boundary-aligned write that lands 59.97s after the previous one
+    # (old effective_interval==60 floor skipped every other minute)
+    from bot.safety import ProfileGovernor
+
+    class GovApp:
+        s_kv = {"clock_interval": 60, "safety_daily_updates": 1600}
+
+        def s(self, k, d=None):
+            return self.s_kv.get(k, d)
+
+        def now(self):
+            return datetime.datetime.now(ZoneInfo("Asia/Tehran"))
+
+        async def client(self, request):
+            return True
+
+        async def notify_owner_critical(self, text):
+            pass
+
+    class GovDB:
+        _kv = {}
+
+        def setting(self, k, d=None):
+            return self._kv.get(k, d)
+
+        def set_setting(self, k, v):
+            self._kv[k] = v
+
+    ga = GovApp()
+    ga.db = GovDB()
+    gov = ProfileGovernor(ga)
+    gov.last_try["last_name"] = time.time() - 59.97
+    ok, retry, why = asyncio.run(gov.apply("last_name", lambda: "｜ 𝟭𝟲:𝟬𝟯"))
+    assert ok and why == "ok", (ok, retry, why)
+    gov2 = ProfileGovernor(ga)
+    gov2.backoff = 1.5
+    gov2.last_try["last_name"] = time.time() - 59.97
+    ok2, retry2, why2 = asyncio.run(gov2.apply("last_name", lambda: "｜ 𝟭𝟲:𝟬𝟰"))
+    assert (not ok2) and why2 == "pace" and retry2 > 25, (ok2, retry2, why2)
+    print("[16] v2.5.1 OK (pacing coin-flip fixed: 59.97s healthy gap writes, "
+          "degraded backoff still paces)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
