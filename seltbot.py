@@ -562,12 +562,38 @@ def selftest():
     assert "Zahra" in at and "💤" in at and "در حال استراحت" in at \
         and "━━" in at and "۵ دقیقه" in at, at
     at2 = afkmod._build_afk_text(AfkShim(), "Zahra", 30, time.time(), "")
-    assert "همین الان" in at2 and "دلیل" not in at2 and "━━" in at2, at2
+    assert "تازه رفتم" in at2 and "دلیل" not in at2 and "━━" in at2, at2
+    assert "ساعت رفتنم" in at2 and "پیامت پیش خودم" in at2, at2
     at3 = afkmod._build_afk_text(AfkShim(), "Zahra", 500, time.time() - 500,
                                   "")
     assert "دلیل" not in at3, at3
     print("[14] v2.4 OK (clock offset math ±300s, fresh-render callables, "
           "structured AFK template + humanized durations + .afktext)")
+    # v2.5: digit-font registry — every style renders distinct glyphs and
+    # the default is the new bold font
+    # no clock_digits key set → the NEW default font (bold) must apply
+    cur = clockmod.render(AfkShim(), "{hhm}:{mmm}",
+                          datetime.datetime(2026, 10, 7, 15, 40,
+                                            tzinfo=ZoneInfo("Asia/Tehran")))
+    assert cur == "𝟭𝟱:𝟰𝟬", cur
+    for style, want in (("bold", "𝟭𝟱:𝟰𝟬"), ("fa", "۱۵:۴۰"),
+                        ("mono", "𝟷𝟻:𝟺𝟶"), ("double", "𝟙𝟝:𝟜𝟘"),
+                        ("serif", "𝟏𝟓:𝟒𝟎"), ("full", "１５:４０")):
+        class DgShim(AfkShim):
+            def s(self, k, d=None):
+                return {"clock_digits": style}.get(k, d)
+        got = clockmod.render(DgShim(), "{hhm}:{mmm}",
+                              datetime.datetime(2026, 10, 7, 15, 40,
+                                                tzinfo=ZoneInfo("Asia/Tehran")))
+        assert got == want, (style, got, want)
+    assert clockmod.DEFAULT_DIGITS == "bold"
+    # v2.5: md2html — manager-bot markdown subset → safe HTML
+    from bot.core import md2html
+    h = md2html("**bold** و `code` و [زهرا](tg://user?id=1) و <raw>")
+    assert "<b>bold</b>" in h and "<code>code</code>" in h \
+        and '<a href="tg://user?id=1">زهرا</a>' in h and "&lt;raw&gt;" in h, h
+    assert "**" not in h, h
+    print("[15] v2.5 OK (7 digit fonts incl. bold default, md2html converter)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
