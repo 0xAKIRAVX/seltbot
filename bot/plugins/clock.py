@@ -53,24 +53,70 @@ _DIGIT_CLS = (
     + _rng(0xFF10, 0xFF19)    # fullwidth
 )
 
+# v2.5.2 — the clock can emit DATE-shaped names too ({jdate} templates).
+# The old pattern only matched "HH:MM" names, so a profile showing
+# "1405/07/15 ｜ 𝟏𝟔:𝟑𝟒" was NOT recognized as our clock → the boot base
+# capture archived that string as the user's "real" last_name, and
+# .clock off / restore would write the date back as a permanent name.
+_DATE_SH = (rf"[{_DIGIT_CLS}]{{1,4}}\s*[/.-]\s*[{_DIGIT_CLS}]{{1,2}}"
+            rf"\s*[/.-]\s*[{_DIGIT_CLS}]{{1,2}}")
+_TIME_SH = (rf"[{_DIGIT_CLS}]{{1,2}}\s*[:.،]\s*[{_DIGIT_CLS}]{{2}}"
+            rf"(?:\s*[:.،]\s*[{_DIGIT_CLS}]{{2}})?")
 CLOCK_NAME_RE = re.compile(
-    rf"^[\W_]{{0,8}}?\s*[{_DIGIT_CLS}]{{1,2}}\s*[:.،]\s*[{_DIGIT_CLS}]{{2}}"
-    rf"(\s*[:.،]\s*[{_DIGIT_CLS}]{{2}})?[\s\W_]*$")
+    rf"^[\W_]{{0,8}}?\s*{_TIME_SH}[\s\W_]*$"
+    rf"|^[\W_]{{0,8}}?\s*{_DATE_SH}\s*[\W_]{{0,4}}?\s*{_TIME_SH}[\s\W_]*$"
+    rf"|^[\W_]{{0,8}}?\s*{_DATE_SH}[\s\W_]*$")
 
-TOKENS_HELP_FA = """🧩 توکن‌های قالب:
-`{hhm}:{mmm}` → ساعت:دقیقه با فونت ارقام انتخابی
-`{hh}:{mm}:{ss}` → 04:45:12
-`{h12} {ampm}` → 4 ب.ظ
-`{jdate}` → 1405/07/15
+TOKENS_HELP_FA = """🧩 توکن‌های قالب (ارقام همه با فونت انتخابی می‌شینن):
+`{hhm}:{mmm}` → ساعت:دقیقه
+`{jdate}` → 1405/07/15 (شمسی)
 `{jWD} {jd} {jMon} {jy}` → چهارشنبه ۱۵ مهر ۱۴۰۵
+`{h12}:{mm} {ampm}` → 4:45 ب.ظ
 `{WD} {day} {Mon} {year}` → Thursday 7 October 2026
 `{name}` → اسم/بیوی اصلیت
-مثال: `.clock text ｜ {hhm}:{mmm}`
+مثال: `.clock text {jdate} ｜ {hhm}:{mmm}`
 فونت ارقام: `.clock digits` (بولد/فارسی/مونو/توخالی/کلاسیک/عریض/ساده)"""
 
 
-def looks_like_clock(s):
-    return bool(s) and bool(CLOCK_NAME_RE.match(s.strip()))
+def looks_like_clock(s, app=None):
+    """True if s looks like something the clock itself wrote.
+    v2.5.2: accepts date-shaped names in ANY digit font, and when `app` is
+    given also matches anything the CURRENT template could have produced
+    in the last few minutes (covers wordy templates like «چهارشنبه ۱۵ مهر»)."""
+    if not s:
+        return False
+    s = s.strip()
+    if CLOCK_NAME_RE.match(s):
+        return True
+    if app is not None and s in _recent_renders(app):
+        return True
+    return False
+
+
+def _recent_renders(app):
+    """All name/bio strings the current clock config could have emitted in
+    the last ~3 minutes (used by the boot base-capture so a live clock value
+    can never be archived as the user's real name)."""
+    out = set()
+    try:
+        specs = [(app.s("clock_template", DEFAULT_TEMPLATE) or DEFAULT_TEMPLATE,
+                  _target_field(app))]
+        if app.s("clock_bio_on", False):
+            specs.append((app.s("clock_bio_template", DEFAULT_BIO_TEMPLATE)
+                          or DEFAULT_BIO_TEMPLATE, "about"))
+        now = _shifted_now(app)
+        pfx = str(app.s("clock_prefix", "") or "")
+        sfx = str(app.s("clock_suffix", "") or "")
+        for tpl, field in specs:
+            for dmin in (0, -1, -2):
+                try:
+                    t = render(app, tpl, now + datetime.timedelta(minutes=dmin))
+                except Exception:
+                    continue
+                out.add((pfx + t + sfx)[:_limit(app, field)])
+    except Exception:
+        pass
+    return out
 
 
 def render(app, template, dt):
@@ -82,20 +128,26 @@ def render(app, template, dt):
     ampm_fa = "ق.ظ" if h24 < 12 else "ب.ظ"
     ampm_en = "AM" if h24 < 12 else "PM"
     jy, jm, jd = jalali.g2j(dt.year, dt.month, dt.day)
+    # v2.5.2: EVERY numeric token follows the chosen digit font. The old
+    # render left {jdate}/{hh}/{mm}/… in plain ASCII, so «شمسی + ساعت» showed
+    # "1405/07/15 ｜ 𝟏𝟔:𝟑𝟒" — mixed fonts, looked half-broken (owner report:
+    # "تاریخ + ساعت کار نمی‌کنه"). Now the whole string is one consistent font.
     toks = {
-        "h": str(h24), "hh": f"{h24:02d}", "m": str(mi), "mm": f"{mi:02d}",
-        "s": str(se), "ss": f"{se:02d}",
-        "h12": str(h12), "H12": f"{h12:02d}",
+        "h": st(str(h24)), "hh": st(f"{h24:02d}"),
+        "m": st(str(mi)), "mm": st(f"{mi:02d}"),
+        "s": st(str(se)), "ss": st(f"{se:02d}"),
+        "h12": st(str(h12)), "H12": st(f"{h12:02d}"),
         "ampm": ampm_fa if app.fa else ampm_en,
         "hhm": st(f"{h24:02d}"), "mmm": st(f"{mi:02d}"), "ssm": st(f"{se:02d}"),
-        "year": str(dt.year), "month": f"{dt.month:02d}", "day": f"{dt.day:02d}",
+        "year": st(str(dt.year)), "month": st(f"{dt.month:02d}"),
+        "day": st(f"{dt.day:02d}"),
         "Mon": (jalali.G_MONTHS_FA if app.fa else jalali.G_MONTHS_EN)[dt.month - 1],
         "WD": (jalali.WD_FA if app.fa else jalali.WD_EN)[dt.weekday()],
-        "date": f"{dt.year}-{dt.month:02d}-{dt.day:02d}",
-        "jy": str(jy), "jm": f"{jm:02d}", "jd": f"{jd:02d}",
+        "date": st(f"{dt.year}-{dt.month:02d}-{dt.day:02d}"),
+        "jy": st(str(jy)), "jm": st(f"{jm:02d}"), "jd": st(f"{jd:02d}"),
         "jMon": jalali.J_MONTHS_FA[jm - 1],
         "jWD": jalali.WD_FA[dt.weekday()],
-        "jdate": f"{jy}/{jm:02d}/{jd:02d}",
+        "jdate": st(f"{jy}/{jm:02d}/{jd:02d}"),
         "jdatefa": jalali.fa_digits(f"{jy}/{jm:02d}/{jd:02d}"),
     }
     out = template
@@ -150,6 +202,56 @@ def _render_name(app):
 def _render_bio(app):
     tpl = app.s("clock_bio_template", DEFAULT_BIO_TEMPLATE) or DEFAULT_BIO_TEMPLATE
     return _wrap_pfx(app, render(app, tpl, _shifted_now(app)), "about")[:_limit(app, "about")]
+
+
+def _profile_preview(app):
+    """v2.5.2 — the exact string that will sit NEXT TO the owner's name.
+    Showing only the clock fragment confused the owner ("nothing changed") —
+    the real effect is first_name + last_name together."""
+    try:
+        sample = _render_name(app)
+    except Exception:
+        return ""
+    if _target_field(app) == "first_name":
+        return sample
+    first = str(app.s("clock_first_base", "") or "").strip()
+    return (first + " " + sample).strip() if first else sample
+
+
+async def _apply_now(app):
+    """v2.5.2 — a settings change (font/format/prefix) now writes to the
+    profile IMMEDIATELY instead of waiting for the next minute flip. The
+    owner clicked buttons and saw nothing change for up to a minute — and
+    if the clock was OFF, nothing ever changed at all. Honors the governor
+    pacing floor (anti-ban): too soon after the last write → report the wait
+    (the next boundary write picks the change up automatically)."""
+    if not app.s("clock_on", True):
+        return "off"
+    target = _target_field(app)
+    gap = time.time() - app.gov.last_ok.get(target, 0)
+    need = max(1.0, app.gov.min_gap() - 1)
+    if gap >= need:
+        try:
+            ok, retry, why = await app.gov.apply(target,
+                                                 lambda: _render_name(app),
+                                                 force=True)
+            return "ok" if ok else why
+        except Exception:
+            return "error"
+    return f"wait:{int(need - gap) + 1}"
+
+
+async def _apply_feedback(app):
+    """Persian one-liner describing what _apply_now did (for command replies)."""
+    r = await _apply_now(app)
+    if r == "off":
+        return ("\n⚠️ ساعت فعلاً خاموشه! تنظیم ذخیره شد ولی تا روشنش نکنی کنار اسمت"
+                " نمی‌شینه — دکمهٔ «▶️ روشن‌کردن ساعت» یا `.clock on`")
+    if r == "ok":
+        return "\n✅ همین الان روی پروفایلت اعمال شد."
+    if r.startswith("wait:"):
+        return f"\n⏳ ذخیره شد — تا {r[5:]} ثانیهٔ دیگه کنار اسمت می‌شینه."
+    return f"\n⏳ ذخیره شد — اعمال خودکار در آپدیت بعدی ({r})."
 
 
 def _align_next(now, iv, off=0):
@@ -296,8 +398,9 @@ async def clock_cmd(app, ev, arg):
             await ev.reply(TOKENS_HELP_FA)
             return
         app.sets("clock_template", rest)
-        _next_name = 0
-        await ev.reply("✅ قالب ساعت:\n" + render(app, rest, app.now()))
+        note = await _apply_feedback(app)
+        await ev.reply("✅ قالب ساعت ست شد." + note
+                       + "\n" + _profile_preview(app))
     elif sub == "interval":
         try:
             v = int(jalali.to_en_digits(rest))
@@ -329,12 +432,14 @@ async def clock_cmd(app, ev, arg):
         await _clock_digits(app, ev, rest)
     elif sub == "prefix":
         app.sets("clock_prefix", rest)
-        _next_name = 0
-        await ev.reply(f"✅ پیشوند: «{rest}»\nنمونه: {_render_name(app)}")
+        note = await _apply_feedback(app)
+        await ev.reply("✅ پیشوند: «" + rest + "»" + note
+                       + "\n" + _profile_preview(app))
     elif sub == "suffix":
         app.sets("clock_suffix", rest)
-        _next_name = 0
-        await ev.reply(f"✅ پسوند: «{rest}»\nنمونه: {_render_name(app)}")
+        note = await _apply_feedback(app)
+        await ev.reply("✅ پسوند: «" + rest + "»" + note
+                       + "\n" + _profile_preview(app))
     elif sub == "offset":
         if not rest:
             cur = _offset(app)
@@ -384,10 +489,10 @@ async def _clock_digits(app, ev, rest):
             await ev.reply("❌ سبک نامعتبره — لیست: " + " / ".join(DIGIT_STYLES))
             return
         app.sets("clock_digits", key)
-        _next_name = 0
+        note = await _apply_feedback(app)
         await ev.reply(
-            f"✅ فونت ارقام ساعت: **{DIGIT_STYLES[key][0]}** — نمونه: `{_digit_fn(key)(sample)}`\n"
-            "همین دقیقه کنار اسمت می‌شینه.")
+            f"✅ فونت ارقام ساعت: **{DIGIT_STYLES[key][0]}** — نمونه: `{_digit_fn(key)(sample)}`"
+            + note + "\n" + _profile_preview(app))
         return
     lines = ["🔢 **فونت ارقام ساعت** — یکی رو انتخاب کن:", ""]
     for key, (fa_label, fn) in DIGIT_STYLES.items():
@@ -455,9 +560,13 @@ async def restore_cmd(app, ev, arg):
     app.sets("clock_bio_on", False)
     base_name = app.s("clock_name_base", "") or ""
     base_bio = app.s("clock_bio_base", "") or ""
-    await app.gov.apply("last_name", base_name or None, force=True)
+    # v2.5.2 fix: the old `base_name or None` hit the governor's "keep"
+    # branch whenever the original last_name was EMPTY → restore silently
+    # did NOTHING and the clock text stayed on the profile forever.
+    # An empty string is a valid, writable value for last_name/about.
+    await app.gov.apply("last_name", base_name, force=True)
     await app.gov.apply("first_name", app.s("clock_first_base", "") or None, force=True)
-    await app.gov.apply("bio", base_bio or None, force=True)
+    await app.gov.apply("bio", base_bio, force=True)
     app.dels("clock_expected")
     await ev.reply("↩️ اسم و بیو به حالت اصلی برگشت. (برای روشن کردن دوباره: .clock on)")
 
