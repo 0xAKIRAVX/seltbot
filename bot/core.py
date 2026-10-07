@@ -226,16 +226,21 @@ class BotApp:
         except Exception:
             log.exception("send_saved failed")
 
-    async def manager_send(self, chat_id, text):
+    async def manager_send(self, chat_id, text, parse_mode="Markdown"):
         if not self.manager_token:
             return None
+        payload = {"chat_id": chat_id, "text": text[:4000]}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         try:
-            r = await bot_api(self.http, self.manager_token, "sendMessage",
-                              {"chat_id": chat_id, "text": text[:4000]})
+            r = await bot_api(self.http, self.manager_token, "sendMessage", payload)
             if r.get("ok"):
                 self.manager_chat_ok = True
                 return r
-            log.warning("manager_send failed: %s", r.get("description"))
+            desc = str(r.get("description") or "")
+            if parse_mode and ("parse" in desc.lower() or "entities" in desc.lower()):
+                return await self.manager_send(chat_id, text, None)
+            log.warning("manager_send failed: %s", desc)
         except Exception as e:
             log.warning("manager_send error: %s", e)
         return None
@@ -442,8 +447,11 @@ class BotApp:
         if self.db.setting("clock_bio_base") is None:
             self.db.set_setting("clock_bio_base", (getattr(self.me, "about", None) or ""))
         if not self._handlers_added:
-            self.client.add_event_handler(events.NewMessage(), self.on_new_message)
-            self.client.add_event_handler(events.MessageEdited(), self.on_message_edited)
+            # ⚠️ signature: add_event_handler(callback, event) — swapped args kill
+            # ALL event dispatch with "type object 'method' has no attribute 'build'"
+            self.client.add_event_handler(self.on_new_message, events.NewMessage())
+            self.client.add_event_handler(self.on_message_edited,
+                                          events.MessageEdited())
             self._handlers_added = True
         # start plugin background loops
         for name, info in MODULES.items():
