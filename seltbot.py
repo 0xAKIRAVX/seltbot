@@ -477,13 +477,23 @@ def selftest():
     print(f"[11] glass menu OK: {len(menumod.PAGES)} pages, "
           f"{len(menumod.ACTIONS)} wired actions")
 
-    # [12] clock minute-boundary precision (phone-sync)
-    from bot.plugins.clock import _align_next
+    # [12] clock minute-boundary precision + phase-realign (phone-sync)
+    from bot.plugins.clock import _align_next, _next_after
     fake_now = 1791373260.83            # not on a boundary
     nxt = _align_next(fake_now, 60)
     assert 0 < (nxt % 60) < 1.0, f"aligned write not just-after boundary: {nxt % 60}"
     assert nxt - fake_now <= 60.3, f"alignment waits too long: {nxt - fake_now}"
-    print("[12] clock boundary sync OK (write lands just after minute flip)")
+    # ok at boundary+0.4 → next boundary, no force (steady state)
+    ts, f = _next_after(nxt, "ok", 60, 0)
+    assert not f and 0 < ts % 60 < 1.0 and 59 < ts - nxt < 61, (ts, f)
+    # pace at boundary (mid-minute phase locked) → next boundary + force realign
+    ts, f = _next_after(nxt, "pace", 60, 25)
+    assert f and 0 < ts % 60 < 1.0 and 59 < ts - nxt < 61, (ts, f)
+    # flood → timed retry, no force
+    ts, f = _next_after(nxt, "flood", 60, 120)
+    assert not f and ts == nxt + 120, (ts, f)
+    print("[12] clock boundary sync + phase realign OK (flips just after minute "
+          "change, mid-minute phases self-heal)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
