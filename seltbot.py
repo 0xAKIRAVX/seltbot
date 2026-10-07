@@ -98,6 +98,8 @@ MENU = [
     ("unafk", "خاموش‌کردن AFK"),
     ("autoreply", "پاسخ خودکار on/off"),
     ("addreply", "افزودن قانون پاسخ"),
+    ("rules", "قوانین اگر-آنگاه"),
+    ("antispam", "آنتی‌اسپم on/off"),
     ("remind", "یادآور: 30m متن"),
     ("scheduled", "لیست کارهای زمان‌بندی"),
     ("canceltask", "لغو کار"),
@@ -108,10 +110,12 @@ MENU = [
     ("stats", "آمار"),
     ("alert", "هشدار کلمه"),
     ("notify", "اعلان منشن"),
+    ("autochats", "سفید/سیاه‌لیست چت‌ها"),
     ("weather", "آب‌وهوا"),
     ("wiki", "ویکی‌پدیا"),
     ("tr", "ترجمه"),
     ("ai", "گفتگو با AI (نیازمند تنظیم)"),
+    ("sum", "خلاصه‌سازی متن"),
     ("health", "سلامت سیستم"),
     ("restart", "ری‌استارت شیفت"),
     ("ping", "سرعت پاسخ"),
@@ -298,8 +302,8 @@ def selftest():
     uniq = {id(c) for c in COMMANDS.values()}
     print(f"[1] plugins loaded: {len(MODULES)} modules, {len(uniq)} commands, "
           f"{len(COMMANDS)} keys (incl aliases)")
-    assert len(MODULES) >= 18, "missing modules"
-    assert len(uniq) >= 90, "missing commands"
+    assert len(MODULES) >= 21, "missing modules"
+    assert len(uniq) >= 100, "missing commands"
 
     assert jalali.g2j(2023, 3, 21) == (1402, 1, 1), jalali.g2j(2023, 3, 21)
     assert jalali.g2j(2024, 3, 20) == (1403, 1, 1), jalali.g2j(2024, 3, 20)
@@ -380,6 +384,24 @@ def selftest():
     except Exception:
         pass
     print("[8] encrypted state pack/unpack OK (AES-GCM-ish via openssl)")
+
+    from bot.plugins.rules import parse_rule
+    assert parse_rule("kw:سلام -> reply:سلام علیکم") == ("kw", "سلام", "reply", "سلام علیکم")
+    assert parse_rule("media:link -> del") == ("media", "link", "del", "")
+    assert parse_rule("kw:فوری -> alert:کلمهٔ فوری گفته شد") == (
+        "kw", "فوری", "alert", "کلمهٔ فوری گفته شد")
+    assert parse_rule("from:@ali -> react:❤️") == ("from", "@ali", "react", "❤️")
+    assert parse_rule("bad:xx -> reply:yy") is None
+    assert parse_rule("kw:xx -> nope:yy") is None
+    assert parse_rule("kw:xx yy") is None
+    db.rule_add("kw", "تست", "reply", "سلام")
+    db.rule_add("media", "link", "del", "")
+    assert len(db.rules_all()) == 2
+    assert db.rule_del(1)
+    assert len(db.rules_all()) == 1
+    assert db.rule_hit(2) is None
+    assert db.rule_toggle(2, False)
+    print("[9] IF-THEN rule parser + db OK")
 
     print("\n✅ SELFTEST: ALL PASS")
 
