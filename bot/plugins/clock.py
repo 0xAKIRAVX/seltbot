@@ -17,19 +17,56 @@ log = logging.getLogger("seltbot.clock")
 DEFAULT_TEMPLATE = "｜ {hhm}:{mmm}"
 DEFAULT_BIO_TEMPLATE = "{jdate} ｜ {hhm}:{mmm}"
 
+# v2.5 — digit font registry (owner asked for a fancier clock font).
+# key → (Persian label, transform fn). "bold" is the new default: clearly
+# prettier than the thin mono digits and pairs well with a styled name.
+DIGIT_STYLES = {
+    "bold":   ("بولد",   lambda s: jalali.bold_digits(s)),
+    "fa":     ("فارسی",  lambda s: jalali.fa_digits(s)),
+    "mono":   ("مونو",   lambda s: jalali.mono_digits(s)),
+    "double": ("توخالی", lambda s: jalali.double_digits(s)),
+    "serif":  ("کلاسیک", lambda s: jalali.serif_digits(s)),
+    "full":   ("عریض",   lambda s: jalali.full_digits(s)),
+    "ascii":  ("ساده",   lambda s: s),
+}
+DEFAULT_DIGITS = "bold"
+
+
+def _digit_fn(style):
+    ent = DIGIT_STYLES.get(style or "")
+    return ent[1] if ent else (lambda s: s)
+
+
+def _rng(a, b):
+    """regex range 'chr(a)-chr(b)', built from codepoints (typo-proof)."""
+    return f"{chr(a)}-{chr(b)}"
+
+
+# every digit font the clock can emit — keep in sync with DIGIT_STYLES
+_DIGIT_CLS = (
+    "0-9"                     # ascii
+    + _rng(0x06F0, 0x06F9)    # fa
+    + _rng(0x1D7F6, 0x1D7FF)  # mono
+    + _rng(0x1D7EC, 0x1D7F5)  # bold
+    + _rng(0x1D7D8, 0x1D7E1)  # double
+    + _rng(0x1D7CE, 0x1D7D7)  # serif
+    + _rng(0xFF10, 0xFF19)    # fullwidth
+)
+
 CLOCK_NAME_RE = re.compile(
-    r"^[\W_]{0,8}?\s*[0-9۰-۹𝟶-𝟿]{1,2}\s*[:.،]\s*[0-9۰-۹𝟶-𝟿]{2}"
-    r"(\s*[:.،]\s*[0-9۰-۹𝟶-𝟿]{2})?[\s\W_]*$")
+    rf"^[\W_]{{0,8}}?\s*[{_DIGIT_CLS}]{{1,2}}\s*[:.،]\s*[{_DIGIT_CLS}]{{2}}"
+    rf"(\s*[:.،]\s*[{_DIGIT_CLS}]{{2}})?[\s\W_]*$")
 
 TOKENS_HELP_FA = """🧩 توکن‌های قالب:
-`{hhm}:{mmm}` → 𝟶𝟺:𝟺𝟻 (مونو، مثل الان)
+`{hhm}:{mmm}` → ساعت:دقیقه با فونت ارقام انتخابی
 `{hh}:{mm}:{ss}` → 04:45:12
 `{h12} {ampm}` → 4 ب.ظ
 `{jdate}` → 1405/07/15
 `{jWD} {jd} {jMon} {jy}` → چهارشنبه ۱۵ مهر ۱۴۰۵
 `{WD} {day} {Mon} {year}` → Thursday 7 October 2026
 `{name}` → اسم/بیوی اصلیت
-مثال: `.clock text ｜ {hhm}:{mmm}`"""
+مثال: `.clock text ｜ {hhm}:{mmm}`
+فونت ارقام: `.clock digits` (بولد/فارسی/مونو/توخالی/کلاسیک/عریض/ساده)"""
 
 
 def looks_like_clock(s):
@@ -39,14 +76,8 @@ def looks_like_clock(s):
 def render(app, template, dt):
     h24, mi, se = dt.hour, dt.minute, dt.second
     h12 = h24 % 12 or 12
-    style = app.s("clock_digits", "mono") or "mono"
-
-    def st(x):
-        if style == "mono":
-            return jalali.mono_digits(x)
-        if style == "fa":
-            return jalali.fa_digits(x)
-        return x
+    style = app.s("clock_digits", DEFAULT_DIGITS) or DEFAULT_DIGITS
+    st = _digit_fn(style)
 
     ampm_fa = "ق.ظ" if h24 < 12 else "ب.ظ"
     ampm_en = "AM" if h24 < 12 else "PM"
@@ -295,13 +326,7 @@ async def clock_cmd(app, ev, arg):
             app.sets("clock_target", "last_name")
         await ev.reply(f"✅ ساعت روی {'اسم اول' if rest.startswith('first') else 'اسم آخر'} می‌شینه")
     elif sub == "digits":
-        if rest in ("mono", "مونو", "fancy", "font"):
-            app.sets("clock_digits", "mono")
-        elif rest in ("fa", "فارسی", "persian"):
-            app.sets("clock_digits", "fa")
-        else:
-            app.sets("clock_digits", "ascii")
-        await ev.reply(f"✅ سبک ارقام: {app.s('clock_digits')}")
+        await _clock_digits(app, ev, rest)
     elif sub == "prefix":
         app.sets("clock_prefix", rest)
         _next_name = 0
@@ -344,6 +369,34 @@ async def clock_cmd(app, ev, arg):
         await ev.reply(app.t("bad_arg") + "\n" + TOKENS_HELP_FA)
 
 
+async def _clock_digits(app, ev, rest):
+    """v2.5 — show/switch the clock digit font (7 styles)."""
+    global _next_name
+    cur = app.s("clock_digits", DEFAULT_DIGITS) or DEFAULT_DIGITS
+    sample = f"{app.now().hour:02d}:{app.now().minute:02d}"
+    if rest:
+        key = rest.strip().lower()
+        alias = {"fancy": "mono", "font": "mono", "persian": "fa", "en": "ascii",
+                 "انگلیسی": "ascii", "مونو": "mono", "فارسی": "fa", "بولد": "bold",
+                 "توخالی": "double", "کلاسیک": "serif", "عریض": "full", "ساده": "ascii"}
+        key = alias.get(key, key)
+        if key not in DIGIT_STYLES:
+            await ev.reply("❌ سبک نامعتبره — لیست: " + " / ".join(DIGIT_STYLES))
+            return
+        app.sets("clock_digits", key)
+        _next_name = 0
+        await ev.reply(
+            f"✅ فونت ارقام ساعت: **{DIGIT_STYLES[key][0]}** — نمونه: `{_digit_fn(key)(sample)}`\n"
+            "همین دقیقه کنار اسمت می‌شینه.")
+        return
+    lines = ["🔢 **فونت ارقام ساعت** — یکی رو انتخاب کن:", ""]
+    for key, (fa_label, fn) in DIGIT_STYLES.items():
+        mark = "✅" if key == cur else "▫️"
+        lines.append(f"{mark} {fa_label} → `{fn(sample)}`  (`.clock digits {key}`)")
+    lines += ["", "از منوی مدیریت هم می‌تونی با دکمه عوضش کنی 🧊"]
+    await ev.reply("\n".join(lines))
+
+
 async def _clock_bio(app, ev, rest):
     global _next_bio
     parts = rest.split(None, 1)
@@ -384,7 +437,7 @@ async def _clock_status(app, ev):
            if (app.s("clock_prefix", "") or app.s("clock_suffix", "")) else ""),
         f"• نمونه: {_render_name(app)}",
         f"• فاصله: {app.s('clock_interval', 60)}s (بیو: {app.s('clock_bio_interval', 60)}s)",
-        f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {app.s('clock_digits', 'mono')}",
+        f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {DIGIT_STYLES.get(app.s('clock_digits', DEFAULT_DIGITS) or DEFAULT_DIGITS, ('?',))[0]}",
         f"• کالیبره با گوشی: {off:+d} ثانیه"
         + (" (`.clock offset` برای تنظیم)" if not off else ""),
         f"• آپدیت بعدی: {jalali.fmt_dur(nxt, fa=True) if nxt is not None else '—'}",
