@@ -17,6 +17,11 @@ _rotate_task = None
 
 async def start(app):
     global _rotate_task
+    # cancel a previous incarnation first — run() re-calls start()
+    # after reconnects; without this the loop runs TWICE (double
+    # profile writes → flood/ban risk)
+    if _rotate_task and not _rotate_task.done():
+        _rotate_task.cancel()
     _rotate_task = asyncio.ensure_future(_rotate_loop(app))
 
 
