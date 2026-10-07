@@ -4,6 +4,7 @@ Targets: last_name (default, keeps first_name untouched), first_name, or bio.
 Formats: mono/ascii/fa digits, 12/24h, Jalali/Gregorian date, custom templates.
 """
 import asyncio
+import datetime
 import logging
 import re
 import time
@@ -78,6 +79,24 @@ def _target_field(app):
     return "first_name" if app.s("clock_target", "last_name") == "first_name" else "last_name"
 
 
+def _offset(app):
+    """v2.4 calibration: seconds to shift the clock so flips match the PHONE.
+
+    The runner is NTP-synced, but the user's phone clock often runs up to a
+    minute off true time (carrier NITZ drift — very common in Iran). +N makes
+    the visible flip happen N seconds EARLIER (phone ahead of NTP), -N later.
+    """
+    try:
+        v = int(str(app.s("clock_offset", 0) or 0).replace("+", ""))
+        return max(-300, min(300, v))
+    except Exception:
+        return 0
+
+
+def _shifted_now(app):
+    return app.now() + datetime.timedelta(seconds=_offset(app))
+
+
 def _limit(app, target):
     if target == "about":
         return 139 if getattr(app.me, "premium", False) else 69
@@ -94,21 +113,23 @@ def _wrap_pfx(app, s, target):
 
 def _render_name(app):
     tpl = app.s("clock_template", DEFAULT_TEMPLATE) or DEFAULT_TEMPLATE
-    return _wrap_pfx(app, render(app, tpl, app.now()), _target_field(app))[:_limit(app, _target_field(app))]
+    return _wrap_pfx(app, render(app, tpl, _shifted_now(app)), _target_field(app))[:_limit(app, _target_field(app))]
 
 
 def _render_bio(app):
     tpl = app.s("clock_bio_template", DEFAULT_BIO_TEMPLATE) or DEFAULT_BIO_TEMPLATE
-    return _wrap_pfx(app, render(app, tpl, app.now()), "about")[:_limit(app, "about")]
+    return _wrap_pfx(app, render(app, tpl, _shifted_now(app)), "about")[:_limit(app, "about")]
 
 
-def _align_next(now, iv):
-    # Write lands ~0.3s AFTER the minute boundary so the visible change happens
-    # right as the phone's clock flips (epoch is minute-aligned for whole-minute
-    # UTC offsets such as Iran's +3:30). The loop then sleeps precisely until
-    # the next action (see _loop) instead of polling at 1s granularity.
+def _align_next(now, iv, off=0):
+    # Write lands ~0.3s AFTER the (offset-shifted) minute boundary so the
+    # visible change happens right as the phone's clock flips (epoch is
+    # minute-aligned for whole-minute UTC offsets such as Iran's +3:30).
+    # `off` shifts the whole schedule: the flip happens exactly when
+    # (true_time + off) crosses a minute boundary — that is what makes the
+    # profile clock match the user's PHONE even if the phone runs off NTP.
     if iv >= 60 and 60 % iv == 0:
-        return (int(now / iv) + 1) * iv + 0.3
+        return (int((now + off) / iv) + 1) * iv + 0.3 - off
     return now + iv + 0.2
 
 
@@ -121,7 +142,7 @@ _force_name = False    # realign flag: force next boundary-window write
 _force_bio = False
 
 
-def _next_after(now, why, iv, retry):
+def _next_after(now, why, iv, retry, off=0):
     """Decide (next_ts, force_next) after a governor result.
 
     ok/same/keep → align to the next interval boundary (flip just after the
@@ -132,9 +153,9 @@ def _next_after(now, why, iv, retry):
     flood/budget/error → timed retry (phase self-heals via pace→force later).
     """
     if why == "pace":
-        return _align_next(now, iv), True
+        return _align_next(now, iv, off), True
     if why in ("ok", "same", "keep"):
-        return _align_next(now, iv), False
+        return _align_next(now, iv, off), False
     return now + max(5, min(retry or 30, 600)), False
 
 
@@ -158,21 +179,26 @@ async def _loop(app):
     while not app.stopping:
         try:
             now = time.time()
+            off = _offset(app)
             if not app.module_off("clock") and app.s("clock_on", True):
                 if now >= _next_name:
-                    text = _render_name(app)
-                    ok, retry, why = await app.gov.apply(_target_field(app), text,
-                                                         force=_force_name)
+                    # v2.4: pass a CALLABLE — the governor re-renders it right
+                    # before the actual profile write, so the minute shown is
+                    # the minute at write-time (not at wake-time). Kills the
+                    # rare stale-render that made the clock lag a full minute.
+                    ok, retry, why = await app.gov.apply(
+                        _target_field(app), lambda: _render_name(app),
+                        force=_force_name)
                     _last_why = why
                     iv = max(app.gov.min_gap(), int(app.s("clock_interval", 60)))
-                    _next_name, _force_name = _next_after(now, why, iv, retry)
+                    _next_name, _force_name = _next_after(now, why, iv, retry, off)
             if not app.module_off("clock") and app.s("clock_bio_on", False):
                 if now >= _next_bio:
-                    text = _render_bio(app)
-                    ok, retry, why = await app.gov.apply("bio", text,
+                    text_fn = (lambda: _render_bio(app))
+                    ok, retry, why = await app.gov.apply("bio", text_fn,
                                                          force=_force_bio)
                     iv = max(60, int(app.s("clock_bio_interval", 60)))
-                    _next_bio, _force_bio = _next_after(now, why, iv, retry)
+                    _next_bio, _force_bio = _next_after(now, why, iv, retry, off)
             if now >= _next_verify:
                 _next_verify = now + 300
                 if app.s("clock_on", True) or app.s("clock_bio_on", False):
@@ -194,10 +220,11 @@ def _fmt_ts(app, ts):
     return app.now().fromtimestamp(ts, app.tzinfo).strftime("%H:%M:%S")
 
 
-@command("clock", "clock", "[on/off/text/interval/tz/target/digits/bio/status]",
+@command("clock", "clock", "[on/off/text/interval/tz/target/offset/digits/bio/status]",
          "ساعت زندهٔ کنار اسم/بیو + تنظیمات", "Live clock in name/bio + settings",
          aliases=("clockname",))
 async def clock_cmd(app, ev, arg):
+    global _next_name
     parts = arg.split(None, 1)
     sub = (parts[0].lower() if parts else "status")
     rest = parts[1].strip() if len(parts) > 1 else ""
@@ -206,7 +233,6 @@ async def clock_cmd(app, ev, arg):
         await _clock_status(app, ev)
     elif sub == "on":
         app.sets("clock_on", True)
-        global _next_name
         _next_name = 0
         await ev.reply("🕐 ساعت روشن شد — همین الان کنار اسمت می‌شینه."
                        if app.fa else "🕐 Clock enabled.")
@@ -270,6 +296,34 @@ async def clock_cmd(app, ev, arg):
         app.sets("clock_suffix", rest)
         _next_name = 0
         await ev.reply(f"✅ پسوند: «{rest}»\nنمونه: {_render_name(app)}")
+    elif sub == "offset":
+        if not rest:
+            cur = _offset(app)
+            await ev.reply(
+                f"🎛 انحراف کالیبره با ساعت گوشی: {cur:+d} ثانیه\n\n"
+                "ساعت پروفایل با ساعت واقعیِ اینترنت (NTP) همگامه، ولی ساعت"
+                " گوشی‌ها گاهی تا یه دقیقه باهاش فرق داره (خطای اپراتور)."
+                " اگه همیشه یه اختلاف ثابتی می‌بینی، این‌طوری کالیبره کن که"
+                " تغییر دقیقه دقیقاً با گوشی‌ات بیفته:\n"
+                "`.clock offset +40` → جلو بنداز (وقتی گوشی‌ات جلوته)\n"
+                "`.clock offset -40` → عقب بنداز (وقتی گوشی‌ات عقبه)\n"
+                "`.clock offset 0` → حذف انحراف\n\n"
+                "چند دقیقه پشت‌سرهم مقایسه کن و میانگین بگیر (حداکثر ±۳۰۰ ثانیه)."
+                if app.fa else
+                f"🎛 Clock offset: {cur:+d}s\n.clock offset +N / -N / 0")
+            return
+        try:
+            v = int(str(jalali.to_en_digits(rest.strip())).replace("+", ""))
+        except ValueError:
+            await ev.reply("❌ فرمت: `.clock offset +40` یا `-40` (ثانیه)" if app.fa
+                           else "❌ `.clock offset +40` or `-40` (seconds)")
+            return
+        v = max(-300, min(300, v))
+        app.sets("clock_offset", v)
+        _next_name = 0
+        await ev.reply((f"✅ انحراف ساعت: {v:+d} ثانیه — از همین لحظه اعمال شد.\n"
+                        f"نمونهٔ فعلی: {_render_name(app)}") if app.fa else
+                       (f"✅ Clock offset: {v:+d}s\nNow: {_render_name(app)}"))
     elif sub == "bio":
         await _clock_bio(app, ev, rest)
     else:
@@ -304,6 +358,7 @@ async def _clock_bio(app, ev, rest):
 
 async def _clock_status(app, ev):
     g = app.gov.status_line()
+    off = _offset(app)
     nxt = max(0, int(_next_name - time.time())) if app.s("clock_on", True) else None
     lines = [
         "🕐 **وضعیت ساعت**",
@@ -316,6 +371,8 @@ async def _clock_status(app, ev):
         f"• نمونه: {_render_name(app)}",
         f"• فاصله: {app.s('clock_interval', 60)}s (بیو: {app.s('clock_bio_interval', 60)}s)",
         f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {app.s('clock_digits', 'mono')}",
+        f"• کالیبره با گوشی: {off:+d} ثانیه"
+        + (" (`.clock offset` برای تنظیم)" if not off else ""),
         f"• آپدیت بعدی: {jalali.fmt_dur(nxt, fa=True) if nxt is not None else '—'}",
         f"• آخرین نوشتن: {_last_why}",
         f"• 🛡 ضدبن: backoff ×{g['backoff']} | strikes: {g['strikes_1h']}"
