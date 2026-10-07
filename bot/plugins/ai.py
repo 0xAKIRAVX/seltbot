@@ -30,12 +30,13 @@ ENV_KEY = os.environ.get("AI_API_KEY", "")
 ENV_MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
 
 # fallback chain used when the configured model errors/overloads/empties.
-# order = current known-good free models first.
+# v2.3.1 order: openrouter/free is OpenRouter's own maintained free router
+# (most stable) → then nemotron tiers; gemma last (persistent 429s).
 FALLBACK_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/free",
-    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
     "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "google/gemma-4-31b-it:free",
 ]
 
 
