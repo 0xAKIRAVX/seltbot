@@ -21,9 +21,14 @@ AFK_TOKENS_HELP = (
     "`{dur}` → مدت نبودن — خودکار «همین الان» / «۵ دقیقه» / «۲ ساعت و ۱۷ دقیقه»\n"
     "`{time}` → ساعت رفتن (مثل ۱۴:۰۲)\n"
     "`{reason}` → دلیل AFK (اگه گفته باشی؛ اگه نداده باشی این خط خودش حذف می‌شه)\n\n"
-    "مثال:\n"
-    "💤 {name} جان نیستم\n⏱ {dur} رفتم (ساعت {time})\n📝 {reason}\n\n"
-    "برگردوندن قالب پیش‌فرض: `.afktext reset`"
+    "قالب پیش‌فرض:\n"
+    "💤 {name} جان، فعلاً پیش نیستم\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "⏱ مدت نبودنم: {dur}\n"
+    "🕐 ساعت رفتنم: {time}\n"
+    "📝 دلیل: {reason}\n\n"
+    "📬 پیامت پیش خودم می‌مونه؛ به محض برگشتن جواب می‌دم ✨\n\n"
+    "برگردوندن پیش‌فرض: `.afktext reset`"
 )
 
 
@@ -67,34 +72,38 @@ def _build_afk_text(app, name, dur_s, since_ts, reason):
         out = re.sub(r"\n{3,}", "\n\n", out)
         return out.strip()
 
-    # default template — assembled so structure stays tidy in every case
+    # default template — v2.5: elegant, tidy, spelling-checked. Structure:
+    # greeting → divider → info rows (duration / departure time / optional
+    # reason) → blank → warm closing line. Every line short enough to look
+    # clean on one screen in both official Telegram and forks.
     if app.fa:
-        durline = (f"همین الان رفتم (ساعت {hm})" if dur_s < 90 else
-                   f"مدت نبودنم: {dur} — رفتن ساعت {hm}")
         lines = [
-            f"💤 {name} جان، الان پیش نیستم",
-            "━━━━━━━━━━━━━━━━",
-            f"⏱ {durline}",
+            f"💤 {name} جان، فعلاً پیش نیستم",
+            "━━━━━━━━━━━━━━━━━━",
         ]
+        if dur_s < 90:
+            lines.append(f"⏱ تازه رفتم")
+        else:
+            lines.append(f"⏱ مدت نبودنم: {dur}")
+        lines.append(f"🕐 ساعت رفتنم: {hm}")
         if reason:
             lines.append(f"📝 دلیل: {reason}")
         lines += [
             "",
-            "📬 پیامت پیشم می‌مونه — به محض برگشتن جواب می‌دم ✌️",
+            "📬 پیامت پیش خودم می‌مونه؛ به محض برگشتن جواب می‌دم ✨",
         ]
         return "\n".join(lines)
-    durline = (f"left just now ({hm})" if dur_s < 90 else
-               f"away for {dur} — since {hm}")
     lines = [
-        f"💤 {name}, I'm away right now",
-        "━━━━━━━━━━━━━━━━",
-        f"⏱ {durline}",
+        f"💤 {name}, I'm away at the moment",
+        "━━━━━━━━━━━━━━━━━━",
+        ("⏱ Just left" if dur_s < 90 else f"⏱ Away for {dur}"),
+        f"🕐 Left at {hm}",
     ]
     if reason:
         lines.append(f"📝 {reason}")
     lines += [
         "",
-        "📬 Your message is saved — I'll reply as soon as I'm back ✌️",
+        "📬 Your message is safe with me — I'll reply as soon as I'm back ✨",
     ]
     return "\n".join(lines)
 
