@@ -673,6 +673,40 @@ def selftest():
     print("[17] v2.5.2 OK (empty-base restore writes, None keeps; styled"
           " jdate in chosen font; instant-apply path)")
 
+    # [18] v2.6: «حذف تاریخ» — strip date tokens from any template while
+    # keeping the clock part intact; leading «｜» divider survives, dangling
+    # stubs are removed, date-only templates fall back to the default.
+    sd, hdt = clockmod._strip_date, clockmod.has_date_tokens
+    assert sd("{jdate} ｜ {hhm}:{mmm}") == "｜ {hhm}:{mmm}", \
+        sd("{jdate} ｜ {hhm}:{mmm}")
+    assert sd("{hhm}:{mmm} ｜ {jdate}") == "{hhm}:{mmm}", \
+        sd("{hhm}:{mmm} ｜ {jdate}")
+    assert sd("{jdate} - {hhm}:{mmm}") == "{hhm}:{mmm}", \
+        sd("{jdate} - {hhm}:{mmm}")
+    assert sd("{jWD} {jd} {jMon} {jy} ｜ {hhm}:{mmm}") == "｜ {hhm}:{mmm}", \
+        sd("{jWD} {jd} {jMon} {jy} ｜ {hhm}:{mmm}")
+    assert sd("📅 {jdate} | {h12}:{mm} {ampm}") == "｜ {h12}:{mm} {ampm}", \
+        sd("📅 {jdate} | {h12}:{mm} {ampm}")
+    assert sd("🗓 {jWD} — {hhm}:{mmm}") == "{hhm}:{mmm}", \
+        sd("🗓 {jWD} — {hhm}:{mmm}")
+    assert sd("{jy}/{jm}/{jd}") == ""          # date-only → caller falls back
+    assert sd("｜ {hhm}:{mmm}") == "｜ {hhm}:{mmm}"       # idempotent
+    assert sd("{h12}:{mm} {ampm}") == "{h12}:{mm} {ampm}"  # untouched
+    assert sd("{name} ｜ {hhm}:{mmm}") == "{name} ｜ {hhm}:{mmm}"  # {name} survives
+    assert hdt("{jdate} ｜ {hhm}:{mmm}") and hdt("🗓 {hhm}:{mmm}") \
+        and hdt("{WD} {day}")
+    assert not hdt("｜ {hhm}:{mmm}") and not hdt("{name} | {h12}:{mm} {ampm}") \
+        and not hdt("") and not hdt(None)
+    # end-to-end: strip the live v2.5.2 template, render it in serif → the
+    # date part is GONE and the time part keeps the chosen font
+    stripped = sd("{jdate} ｜ {hhm}:{mmm}")
+    got = clockmod.render(SerifShim(), stripped,
+                          datetime.datetime(2026, 10, 7, 17, 15,
+                                            tzinfo=ZoneInfo("Asia/Tehran")))
+    assert got == f"｜ {serif('17')}:{serif('15')}", got
+    print("[18] v2.6 OK («حذف تاریخ»: token/emoji stripping, divider tidy, "
+          "idempotent, font preserved end-to-end)")
+
     print("\n✅ SELFTEST: ALL PASS")
 
 
