@@ -112,13 +112,13 @@ def _clock_sample(app):
 
 def _ai_line(app):
     try:
-        url = (app.s("ai_url", "") or "").rstrip("/")
-        key = app.s("ai_key", "") or ""
-        model = app.s("ai_model", "") or "gpt-4o-mini"
+        # v2.3.1: was DB-only → menu lied "کلید/تنظیم نیست" even when the
+        # AI env secrets (AI_API_URL/KEY/MODEL from repo secrets) were live.
+        # Now we use the SAME config resolution as the real .ai command.
+        from .plugins.ai import _cfg
+        url, key, model = _cfg(app)
         if not url:
-            url = "OpenRouter (env)"
-        if not key:
-            key = ""
+            url = "—"
         masked = (key[:7] + "…" + key[-4:]) if len(key) > 14 else ("ست شده" if key else "—")
         return url, model, masked, bool(url and key)
     except Exception:
@@ -319,11 +319,12 @@ def page_sched(app):
 
 def page_ai(app):
     url, model, masked, ok = _ai_line(app)
+    host = url.split("//")[-1].split("/")[0] if url and url != "—" else "—"
     lines = [
         "🧠 **هوش مصنوعی**",
         "━━━━━━━━━━━━━━━━━━",
         f"• وضعیت: {'✅ فعال' if ok else '⛔ کلید/تنظیم نیست'}",
-        f"• سرویس: {url}",
+        f"• سرویس: {host}",
         f"• مدل: {model}",
         f"• کلید: {masked}",
         "",
