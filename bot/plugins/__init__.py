@@ -19,6 +19,7 @@ PLUGINS = [
     ("search", "جستجو و اطلاعات", "Search & info"),
     ("media", "ابزار مدیا و عکس پروفایل", "Media tools"),
     ("ai", "هوش مصنوعی و خلاصه‌سازی", "AI & summarizer"),
+    ("watcher", "اعلان دیدن و فعالیت", "Who-is-watching-you alerts"),
     ("security", "امنیت و دسترسی‌ها", "Security"),
     ("settingsmod", "تنظیمات", "Settings"),
     ("stats", "آمار", "Statistics"),
