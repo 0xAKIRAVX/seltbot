@@ -17,15 +17,15 @@ log = logging.getLogger("seltbot.afk")
 
 AFK_TOKENS_HELP = (
     "🧩 توکن‌های قالب پیام AFK:\n"
-    "`{name}` → اسم طرف (کلیک‌شده)\n"
-    "`{dur}` → مدت نبودن — خودکار «همین الان» / «۵ دقیقه» / «۲ ساعت و ۱۷ دقیقه»\n"
+    "`{name}` → اسمِ همون کسی که پیام داده\n"
+    "`{dur}` → مدت غیبت — خودکار «همین الان» / «۵ دقیقه» / «۲ ساعت و ۱۷ دقیقه»\n"
     "`{time}` → ساعت رفتن (مثل ۱۴:۰۲)\n"
     "`{reason}` → دلیل AFK (اگه گفته باشی؛ اگه نداده باشی این خط خودش حذف می‌شه)\n\n"
     "قالب پیش‌فرض:\n"
-    "💤 {name} جان، فعلاً پیش نیستم\n"
+    "💤 {name} جان، فعلاً مشغول هستم\n"
     "━━━━━━━━━━━━━━━━━━\n"
-    "⏱ مدت نبودنم: {dur}\n"
-    "🕐 ساعت رفتنم: {time}\n"
+    "⏱ مدت غیبت: {dur}\n"
+    "🕐 ساعت رفتن: {time}\n"
     "📝 دلیل: {reason}\n\n"
     "📬 پیامت پیش خودم می‌مونه؛ به محض برگشتن جواب می‌دم ✨\n\n"
     "برگردوندن پیش‌فرض: `.afktext reset`"
@@ -72,20 +72,20 @@ def _build_afk_text(app, name, dur_s, since_ts, reason):
         out = re.sub(r"\n{3,}", "\n\n", out)
         return out.strip()
 
-    # default template — v2.5: elegant, tidy, spelling-checked. Structure:
-    # greeting → divider → info rows (duration / departure time / optional
-    # reason) → blank → warm closing line. Every line short enough to look
-    # clean on one screen in both official Telegram and forks.
+    # default template — v2.5.2: «فعلاً مشغول هستم» (owner: «پیش نیستم»
+    # بی‌معنیه)، «مدت غیبت» / «ساعت رفتن» (spelling-checked labels),
+    # greeting → divider → info rows → warm closing. Short clean lines in
+    # both official Telegram and forks.
     if app.fa:
         lines = [
-            f"💤 {name} جان، فعلاً پیش نیستم",
+            f"💤 {name} جان، فعلاً مشغول هستم",
             "━━━━━━━━━━━━━━━━━━",
         ]
         if dur_s < 90:
-            lines.append(f"⏱ تازه رفتم")
+            lines.append("⏱ تازه رفتم")
         else:
-            lines.append(f"⏱ مدت نبودنم: {dur}")
-        lines.append(f"🕐 ساعت رفتنم: {hm}")
+            lines.append(f"⏱ مدت غیبت: {dur}")
+        lines.append(f"🕐 ساعت رفتن: {hm}")
         if reason:
             lines.append(f"📝 دلیل: {reason}")
         lines += [
@@ -94,7 +94,7 @@ def _build_afk_text(app, name, dur_s, since_ts, reason):
         ]
         return "\n".join(lines)
     lines = [
-        f"💤 {name}, I'm away at the moment",
+        f"💤 {name}, I'm busy at the moment",
         "━━━━━━━━━━━━━━━━━━",
         ("⏱ Just left" if dur_s < 90 else f"⏱ Away for {dur}"),
         f"🕐 Left at {hm}",
@@ -157,9 +157,10 @@ async def afktext_cmd(app, ev, arg):
         await ev.reply("✅ قالب پیام AFK به پیش‌فرضِ مرتب برگشت.")
         return
     app.sets("afk_text", a)
-    sample = _build_afk_text(app, "Zahra", 305, time.time() - 305,
+    sample = _build_afk_text(app, "علی", 305, time.time() - 305,
                              "فعلاً در دسترس نیستم")
-    await ev.reply("✅ قالب ذخیره شد. نمونه:\n\n" + sample + "\n\n" + AFK_TOKENS_HELP)
+    await ev.reply("✅ قالب ذخیره شد. نمونه (به‌جای «علی»، اسمِ همون کسی می‌شینه که پیام داده):\n\n"
+                   + sample + "\n\n" + AFK_TOKENS_HELP)
 
 
 async def _return(app, ev, st):
@@ -212,7 +213,16 @@ async def afk_incoming(app, event):
     since = st.get("since", time.time())
     dur_s = time.time() - since
     reason = (st.get("reason") or "").strip()
-    name = app.user_link(sender, plain=False)
+    # v2.5.2: the greeting carries the REAL sender's name (clickable mention
+    # when possible). Names containing markdown-breaking chars ([ ] ( )) would
+    # corrupt the mention link → fall back to the plain name.
+    first = str(getattr(sender, "first_name", None)
+                or getattr(sender, "username", None)
+                or getattr(sender, "id", "?"))
+    if any(c in first for c in "[]()\\"):
+        name = app.user_link(sender, plain=True)
+    else:
+        name = app.user_link(sender, plain=False)
     txt = _build_afk_text(app, name, dur_s, since, reason)
     try:
         await asyncio.sleep(random.uniform(1.5, 4.0))
