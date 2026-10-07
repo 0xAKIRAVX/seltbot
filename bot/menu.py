@@ -110,6 +110,14 @@ def _clock_sample(app):
         return "—"
 
 
+def _clock_offset(app):
+    try:
+        from .plugins.clock import _offset
+        return _offset(app)
+    except Exception:
+        return 0
+
+
 def _ai_line(app):
     try:
         # v2.3.1: was DB-only → menu lied "کلید/تنظیم نیست" even when the
@@ -159,6 +167,7 @@ def page_clock(app):
     digits = app.s("clock_digits", "mono") or "mono"
     dg_fa = {"mono": "مونو 𝟷𝟸𝟹", "fa": "فارسی ۱۲۳", "ascii": "انگلیسی 123"}.get(digits, digits)
     tpl = app.s("clock_template", "｜ {hhm}:{mmm}") or "｜ {hhm}:{mmm}"
+    off = _clock_offset(app)
     lines = [
         "🕐 **ساعت زنده**",
         "━━━━━━━━━━━━━━━━━━",
@@ -166,6 +175,8 @@ def page_clock(app):
         f"• نمونهٔ زنده: {_clock_sample(app)}",
         f"• قالب فعلی: {tpl}",
         f"• ارقام: {dg_fa}",
+        (f"• کالیبره با گوشی: {off:+d} ثانیه" if off else
+         "• کالیبره با گوشی: بدون انحراف (اگه اختلاف ثابتی دیدی: .clock offset)"),
         f"• ساعت در بیو: {_yn(app, 'clock_bio_on')}",
         "",
         "قالب آماده (دکمه بزن، همون لحقه اعمال می‌شه):",
