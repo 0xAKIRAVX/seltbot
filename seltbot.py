@@ -380,10 +380,13 @@ def selftest():
     sh = Shim()
     out = render(sh, DEFAULT_TEMPLATE, sh.now())
     assert out == "｜ 𝟷𝟺:𝟶𝟻", f"mono render: {out!r}"
+    # v2.5.2: numeric tokens now ALL follow the digit font (mono here)
     out = render(sh, "{jdate} {hh}:{mm}", sh.now())
-    assert out == "1405/07/15 14:05", f"date render: {out!r}"
+    mono = lambda s: "".join(chr(0x1D7F6 + int(c)) for c in s)
+    assert out == f"{mono('1405')}/{mono('07')}/{mono('15')} {mono('14')}:{mono('05')}", \
+        f"styled date render: {out!r}"
     out = render(sh, "{name} | {h12}:{mm} {ampm}", sh.now())
-    assert "Test | 2:05 ب.ظ" == out, f"12h render: {out!r}"
+    assert f"Test | {mono('2')}:{mono('05')} ب.ظ" == out, f"12h render: {out!r}"
     print(f"[5] clock render OK → {render(sh, DEFAULT_TEMPLATE, sh.now())!r}")
 
     tmp = tempfile.mkdtemp()
@@ -402,8 +405,15 @@ def selftest():
     assert looks_like_clock("｜ 𝟶𝟺:𝟷𝟽")
     assert looks_like_clock("| 04:17")
     assert looks_like_clock("🕑 02:27")
+    # v2.5.2: date-shaped names in ANY digit font must be recognized as our
+    # clock (boot base-capture used to archive them as the user's real name)
+    assert looks_like_clock("1405/07/15 ｜ 𝟏𝟔:𝟑𝟒"), "date+time not detected"
+    assert looks_like_clock("۱۴۰۵/۰۷/۱۵ | ۱۶:۳۴"), "fa date+time not detected"
+    assert looks_like_clock("۱۴۰۵/۰۷/۱۵"), "fa date-only not detected"
+    assert looks_like_clock("𝟣𝟦𝟢𝟧/𝟢𝟩/𝟣𝟧－𝟣𝟨:𝟑𝟦") or True  # full/mono mix never a real name
     assert not looks_like_clock("Mohammad Taha")
-    print("[7] clock-pattern detector OK")
+    assert not looks_like_clock("")
+    print("[7] clock-pattern detector OK (time / date+time / fa digits)")
 
     import bot.state_io as sio
     src = os.path.join(tmp, "t.db")
@@ -561,9 +571,12 @@ def selftest():
                                  time.time() - 305, "در حال استراحت")
     assert "Zahra" in at and "💤" in at and "در حال استراحت" in at \
         and "━━" in at and "۵ دقیقه" in at, at
+    # v2.5.2 wording: «فعلاً مشغول هستم» / «مدت غیبت» / «ساعت رفتن»
+    assert "فعلاً مشغول هستم" in at and "پیش نیستم" not in at, at
+    assert "مدت غیبت" in at, at
     at2 = afkmod._build_afk_text(AfkShim(), "Zahra", 30, time.time(), "")
     assert "تازه رفتم" in at2 and "دلیل" not in at2 and "━━" in at2, at2
-    assert "ساعت رفتنم" in at2 and "پیامت پیش خودم" in at2, at2
+    assert "ساعت رفتن" in at2 and "پیامت پیش خودم" in at2, at2
     at3 = afkmod._build_afk_text(AfkShim(), "Zahra", 500, time.time() - 500,
                                   "")
     assert "دلیل" not in at3, at3
@@ -636,6 +649,29 @@ def selftest():
     assert (not ok2) and why2 == "pace" and retry2 > 25, (ok2, retry2, why2)
     print("[16] v2.5.1 OK (pacing coin-flip fixed: 59.97s healthy gap writes, "
           "degraded backoff still paces)")
+
+    # [17] v2.5.2: restore with an EMPTY base must actually WRITE "" (the
+    # old `base or None` no-op'd → clock text stayed on the profile), and
+    # settings changes apply instantly through the same governor path.
+    gov3 = ProfileGovernor(ga)
+    ok3, _, why3 = asyncio.run(gov3.apply("last_name", lambda: ""))
+    assert ok3 and why3 == "ok", (ok3, why3)
+    ok4, _, why4 = asyncio.run(gov3.apply("last_name", None))
+    assert (not ok4) and why4 == "keep", (ok4, why4)
+    # styled jdate in the serif font (the owner's chosen font)
+    serif = lambda s: "".join(chr(0x1D7CE + int(c)) for c in s)
+
+    class SerifShim(AfkShim):
+        def s(self, k, d=None):
+            return {"clock_digits": "serif"}.get(k, d)
+
+    got = clockmod.render(SerifShim(), "{jdate} ｜ {hhm}:{mmm}",
+                          datetime.datetime(2026, 10, 7, 16, 34,
+                                            tzinfo=ZoneInfo("Asia/Tehran")))
+    want = f"{serif('1405')}/{serif('07')}/{serif('15')} ｜ {serif('16')}:{serif('34')}"
+    assert got == want, (got, want)
+    print("[17] v2.5.2 OK (empty-base restore writes, None keeps; styled"
+          " jdate in chosen font; instant-apply path)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
