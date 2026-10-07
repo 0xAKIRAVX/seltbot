@@ -4,17 +4,45 @@
 command through the exact same engine as typed /.commands (app.run_command),
 so the panel and text commands behave identically — one engine, two frontends.
 
+v2.5 redesign:
+  • messages are sent with parse_mode=HTML — the old panel was sent with NO
+    parse mode at all, so every **bold** marker rendered as literal
+    asterisks (the "messy" look the owner complained about).
+  • one visual system on every page: bold header → heavy divider → status
+    rows (status marker first — reads as a clean column in RTL) →
+    <blockquote> examples/previews → italic hint. Single column, consistent
+    icons, no scattered two-item rows.
+  • clock page gained the v2.5 digit-font buttons (bold/fa/mono/double/
+    serif/full/ascii) and the AFK page shows a live preview of the exact
+    message a contact will receive.
+  • ALL dynamic values go through esc() — nothing can break the HTML.
+
 callback_data schema (must stay ≤64 bytes):
   n/<page>      → navigate to page
   <action key>  → ACTIONS[key] = (cmd, arg) → run_command → re-render last page
 """
+import html as _htmlmod
 import logging
+import time as _time
 
+from . import jalali
 from .core import BotEv, bot_api
 
 log = logging.getLogger("seltbot.menu")
 
 _last_page = {}      # chat_id → page id (re-render target after actions)
+
+HR = "━━━━━━━━━━━━━━━━━━"          # page divider (18 chars, everywhere)
+HR_THIN = "──────────────────"
+
+
+def esc(s):
+    """Escape a dynamic value for parse_mode=HTML."""
+    return _htmlmod.escape(str(s if s is not None else ""), quote=False)
+
+
+def _fa_num(n):
+    return jalali.fa_digits(str(n)).replace(",", "٬")
 
 
 # ---------------------------------------------------------------- buttons
@@ -39,9 +67,13 @@ ACTIONS = {
     "ck_fmt2":    ("clock", "text {jdate} ｜ {hhm}:{mmm}"),
     "ck_fmt3":    ("clock", "text {h12}:{mm} {ampm}"),
     "ck_fmt4":    ("clock", "text {name} ｜ {hhm}:{mmm}"),
-    "ck_dg_mono": ("clock", "digits mono"),
-    "ck_dg_fa":   ("clock", "digits fa"),
-    "ck_dg_asc":  ("clock", "digits ascii"),
+    "ck_dg_bold":   ("clock", "digits bold"),
+    "ck_dg_fa":     ("clock", "digits fa"),
+    "ck_dg_mono":   ("clock", "digits mono"),
+    "ck_dg_double": ("clock", "digits double"),
+    "ck_dg_serif":  ("clock", "digits serif"),
+    "ck_dg_full":   ("clock", "digits full"),
+    "ck_dg_asc":    ("clock", "digits ascii"),
     "ck_bio_on":  ("clock", "bio on"),
     "ck_bio_off": ("clock", "bio off"),
     "ck_restore": ("restore", ""),
@@ -118,6 +150,14 @@ def _clock_offset(app):
         return 0
 
 
+def _clock_info(app):
+    try:
+        from .plugins.clock import DEFAULT_TEMPLATE, DEFAULT_DIGITS, DIGIT_STYLES
+        return DEFAULT_TEMPLATE, DEFAULT_DIGITS, DIGIT_STYLES
+    except Exception:
+        return "｜ {hhm}:{mmm}", "mono", {}
+
+
 def _ai_line(app):
     try:
         # v2.3.1: was DB-only → menu lied "کلید/تنظیم نیست" even when the
@@ -136,18 +176,24 @@ def _ai_line(app):
 # ---------------------------------------------------------------- pages
 def page_main(app):
     afk = app.db.setting("afk") or {}
-    lines = [
-        "🧊 **پنل مدیریت SeltBot**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"🕐 ساعت زنده: {_yn(app, 'clock_on', True)}   💤 AFK: {'✅' if afk.get('active') else '⛔'}",
-        f"🤖 پاسخ خودکار: {_yn(app, 'autoreply_on')}   ⚡ قوانین: {_yn(app, 'rules_on')}",
-        f"🛡 آنتی‌اسپم: {_yn(app, 'antispam_on')}   📋 نوت‌ها: {len(app.db.notes_list() or [])}",
-        "",
-        "یک بخش رو انتخاب کن 👇",
+    rows = [
+        f"{_yn(app, 'clock_on', True)} ساعت زنده",
+        f"{'✅' if afk.get('active') else '⛔'} حالت AFK",
+        f"{_yn(app, 'autoreply_on')} پاسخ خودکار",
+        f"{_yn(app, 'rules_on')} قوانین هوشمند",
+        f"{_yn(app, 'antispam_on')} آنتی‌اسپم",
+        f"📋 نوت‌ها: {_fa_num(len(app.db.notes_list() or []))}",
     ]
+    text = "\n".join([
+        "🧊 <b>پنل مدیریت SeltBot</b>",
+        HR,
+        *rows,
+        "",
+        "<i>یک بخش را انتخاب کن 👇</i>",
+    ])
     kb = grid([
         B("🕐 ساعت زنده", "n/clock"),
-        B("💤 AFK", "n/afk"),
+        B("💤 حالت AFK", "n/afk"),
         B("🤖 پاسخ خودکار", "n/autoreply"),
         B("⚡ قوانین هوشمند", "n/rules"),
         B("🛡 آنتی‌اسپم", "n/antispam"),
@@ -160,38 +206,43 @@ def page_main(app):
         B("🩺 سلامت سیستم", "n/health"),
         B("❓ راهنما", "n/help"),
     ], cols=2)
-    return "\n".join(lines), kb
+    return text, kb
 
 
 def page_clock(app):
-    digits = app.s("clock_digits", "mono") or "mono"
-    dg_fa = {"mono": "مونو 𝟷𝟸𝟹", "fa": "فارسی ۱۲۳", "ascii": "انگلیسی 123"}.get(digits, digits)
-    tpl = app.s("clock_template", "｜ {hhm}:{mmm}") or "｜ {hhm}:{mmm}"
+    default_tpl, default_digits, styles = _clock_info(app)
+    digits = app.s("clock_digits", default_digits) or default_digits
+    dg_label = styles.get(digits, ("ساده",))[0]
+    tpl = app.s("clock_template", default_tpl) or default_tpl
     off = _clock_offset(app)
-    lines = [
-        "🕐 **ساعت زنده**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {_yn(app, 'clock_on', True)}",
-        f"• نمونهٔ زنده: {_clock_sample(app)}",
-        f"• قالب فعلی: {tpl}",
-        f"• ارقام: {dg_fa}",
-        (f"• کالیبره با گوشی: {off:+d} ثانیه" if off else
-         "• کالیبره با گوشی: بدون انحراف (اگه اختلاف ثابتی دیدی: .clock offset)"),
-        f"• ساعت در بیو: {_yn(app, 'clock_bio_on')}",
-        "",
-        "قالب آماده (دکمه بزن، همون لحقه اعمال می‌شه):",
-    ]
     on = app.s("clock_on", True)
+    lines = [
+        "🕐 <b>ساعت زنده</b>",
+        HR,
+        f"{'✅' if on else '⛔'} فعال — نمایش زنده:",
+        f"<code>{esc(_clock_sample(app))}</code>",
+        f"🔠 فونت ارقام: <b>{esc(dg_label)}</b>",
+        f"🧩 قالب: <code>{esc(tpl)}</code>",
+        (f"📞 کالیبره با گوشی: <b>{off:+d} ثانیه</b>" if off
+         else "📞 کالیبره با گوشی: بدون انحراف"),
+        f"{'✅' if app.s('clock_bio_on') else '⛔'} ساعت در بیو",
+        "",
+        "<i>یک کلیک = اعمال فوری:</i>",
+    ]
     kb = [
         [B("⏹ خاموش‌کردن ساعت" if on else "▶️ روشن‌کردن ساعت",
            "ck_off" if on else "ck_on")],
-        [B("🖌 ساده ｜ 𝟷𝟶:𝟺𝟻", "ck_fmt1"),
-         B("📅 شمسی 𝟷𝟺𝟶𝟻/𝟶𝟽/𝟷𝟻", "ck_fmt2")],
-        [B("🌗 ۱۲ساعته ۴:۴۵ ب.ظ", "ck_fmt3"),
+        [B("🖌 ساده ｜ ساعت:دقیقه", "ck_fmt1"),
+         B("📅 شمسی + ساعت", "ck_fmt2")],
+        [B("🌗 ۱۲ساعته", "ck_fmt3"),
          B("👤 با اسم اصلی", "ck_fmt4")],
-        [B("🔢 مونو 𝟷𝟸𝟹", "ck_dg_mono"),
-         B("🔢 فارسی ۱۲۳", "ck_dg_fa")],
-        [B("🔢 انگلیسی 123", "ck_dg_asc")],
+        [B("🔢 بولد 𝟭𝟮:𝟯𝟬", "ck_dg_bold"),
+         B("🔢 فارسی ۱۲:۳۰", "ck_dg_fa")],
+        [B("🔢 مونو 𝟷𝟸:𝟹𝟶", "ck_dg_mono"),
+         B("🔢 توخالی 𝟙𝟚:𝟛𝟘", "ck_dg_double")],
+        [B("🔢 کلاسیک 𝟏𝟐:𝟑𝟎", "ck_dg_serif"),
+         B("🔢 عریض １２:３０", "ck_dg_full")],
+        [B("🔢 ساده 12:30", "ck_dg_asc")],
         [B("📝 ساعت در بیو: " + ("خاموش‌کردن" if app.s("clock_bio_on") else "روشن‌کردن"),
            "ck_bio_off" if app.s("clock_bio_on") else "ck_bio_on")],
         [B("↩️ برگرداندن اسم اصلی", "ck_restore")],
@@ -201,23 +252,40 @@ def page_clock(app):
 
 
 def page_afk(app):
-    afk = app.db.setting("afk") or {}
-    active = bool(afk.get("active"))
-    reason = (afk.get("reason") or "—")[:60]
+    try:
+        from .plugins.afk import _build_afk_text
+        st = app.db.setting("afk") or {}
+        active = bool(st.get("active"))
+        reason = (st.get("reason") or "").strip()
+        since = float(st.get("since") or 0)
+        dur_s = max(0.0, _time.time() - since) if (active and since) else 305.0
+        preview = _build_afk_text(
+            app, "زهرا", dur_s, since or (_time.time() - 305),
+            reason or "فعلاً در دسترس نیستم")
+    except Exception:
+        active = False
+        reason = ""
+        dur_s = 0
+        preview = "💤 …"
+        st = {}
+    dur_line = ""
+    if active and dur_s > 90:
+        dur_line = f" · مدت: {jalali.fmt_dur(dur_s, fa=True)}"
     lines = [
-        "💤 **حالت AFK (موجود نیستم)**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {'✅ فعال' if active else '⛔ غیرفعال'}",
-        f"• دلیل: {reason}",
+        "💤 <b>حالت AFK</b>",
+        HR,
+        f"{'✅ فعال' if active else '⛔ غیرفعال'}{dur_line}",
+        f"📝 دلیل: {esc(reason) if reason else '—'}",
         "",
-        "وقتی AFK فعاله، به پیام‌های خصوصی و منشن‌ها خودکار جواب می‌ده و",
-        "مدت نبودنت رو می‌گه. با اولین پیام خودت خودکار خاموش می‌شه.",
-        "دلیل دلخواه: /afk دلیل دلخواهت",
+        "پیش‌نمایش پیامی که برای مخاطب ارسال می‌شود:",
+        f"<blockquote>{esc(preview)}</blockquote>",
+        "",
+        "<i>با اولین پیام خودت، AFK خودکار خاموش می‌شود.</i>",
+        "<i>دلیل دلخواه: /afk دلیل — قالب اختصاصی: /afktext</i>",
     ]
     kb = [
-        [B("▶️ فعال‌کردن AFK" if not active else "⛔ AFK فعاله — خاموش کن؟",
+        [B("⛔ خاموش‌کردن AFK" if active else "▶️ فعال‌کردن AFK",
            "afk_off" if active else "afk_on")],
-        [B("🔄 خاموش‌کردن AFK", "afk_off")],
         [B("⬅️ منوی اصلی", "n/main")],
     ]
     return "\n".join(lines), kb
@@ -226,17 +294,19 @@ def page_afk(app):
 def page_autoreply(app):
     n = len(app.db.reply_rules() or [])
     lines = [
-        "🤖 **پاسخ خودکار**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {_yn(app, 'autoreply_on')}",
-        f"• قوانین ثبت‌شده: {n}",
-        f"• تأخیر پاسخ: {app.s('autoreply_delay', 3)}s | کول‌داون: {app.s('autoreply_cooldown', 60)}s",
+        "🤖 <b>پاسخ خودکار</b>",
+        HR,
+        f"{_yn(app, 'autoreply_on')} فعال",
+        f"📋 قوانین ثبت‌شده: {_fa_num(n)}",
+        f"⏳ تأخیر پاسخ: {_fa_num(app.s('autoreply_delay', 3))} ثانیه"
+        f" · کول‌داون: {_fa_num(app.s('autoreply_cooldown', 60))} ثانیه",
         "",
-        "افزودن قانون: /addreply <کلمه> <جواب>",
-        "مثال: /addreply سلام سلام علیکم عزیزم",
+        "<i>افزودن قانون: /addreply &lt;کلمه&gt; &lt;جواب&gt;</i>",
+        "<blockquote>/addreply سلام سلام علیکم عزیزم</blockquote>",
     ]
     kb = [
-        [B("▶️ روشن", "ar_on") if not app.s("autoreply_on") else B("⏹ خاموش", "ar_off"),
+        [B("▶️ روشن" if not app.s("autoreply_on") else "⏹ خاموش",
+           "ar_on" if not app.s("autoreply_on") else "ar_off"),
          B("📋 لیست قوانین", "ar_list")],
         [B("⬅️ منوی اصلی", "n/main")],
     ]
@@ -246,14 +316,14 @@ def page_autoreply(app):
 def page_rules(app):
     n = len(app.db.rules_all() or [])
     lines = [
-        "⚡ **قوانین اگر-آنگاه**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• موتور قوانین: {_yn(app, 'rules_on')}",
-        f"• قوانین ثبت‌شده: {n}",
+        "⚡ <b>قوانین هوشمند (اگر-آنگاه)</b>",
+        HR,
+        f"{_yn(app, 'rules_on')} موتور قوانین",
+        f"📋 قوانین ثبت‌شده: {_fa_num(n)}",
         "",
-        "افزودن قانون: /rule add kw:سلام -> reply:سلام علیکم",
-        "تریگرها: kw (کلمه) | from (کاربر) | media (مدیا/لینک)",
-        "اکشن‌ها: reply | del | react | alert | fwd | note",
+        "<blockquote>/rule add kw:سلام -> reply:سلام علیکم</blockquote>",
+        "<i>تریگرها: kw (کلمه) · from (کاربر) · media (مدیا/لینک)</i>",
+        "<i>اکشن‌ها: reply · del · react · alert · fwd · note</i>",
     ]
     kb = [
         [B("▶️ روشن" if not app.s("rules_on") else "⏹ خاموش",
@@ -267,13 +337,14 @@ def page_rules(app):
 
 def page_antispam(app):
     lines = [
-        "🛡 **آنتی‌اسپم**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {_yn(app, 'antispam_on')}",
-        f"• حد: {app.s('antispam_burst', 8)} پیام در ۱۰ ثانیه → حذف + زندان ۲ دقیقه‌ای",
+        "🛡 <b>آنتی‌اسپم</b>",
+        HR,
+        f"{_yn(app, 'antispam_on')} فعال",
+        f"⚙️ حد: {_fa_num(app.s('antispam_burst', 8))} پیام در ۱۰ ثانیه"
+        " → حذف + قطع دسترسی ۲ دقیقه‌ای",
         "",
-        "⚠️ فقط وقتی تو چت ادمین باشی می‌تونه پیام رو حذف کنه.",
-        "تغییر حد: /antispam 12",
+        "<i>فقط در چت‌هایی که ادمین باشی می‌تواند پیام را حذف کند.</i>",
+        "<i>تغییر حد: /antispam 12</i>",
     ]
     kb = [
         [B("▶️ روشن" if not app.s("antispam_on") else "⏹ خاموش",
@@ -286,18 +357,18 @@ def page_antispam(app):
 def page_notes(app):
     rows = app.db.notes_list() or []
     lines = [
-        "📋 **نوت‌ها**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• تعداد: {len(rows)}",
+        "📋 <b>نوت‌ها</b>",
+        HR,
+        f"تعداد: {_fa_num(len(rows))}",
     ]
     if rows:
-        lines.append("• آخرین‌ها: " + "، ".join(f"#{r['key']}" for r in rows[:12]))
+        lines.append("آخرین‌ها: " + "، ".join(f"#{esc(r['key'])}" for r in rows[:12]))
     else:
-        lines.append("هنوز نوتی ذخیره نشده.")
+        lines.append("<i>هنوز نوتی ذخیره نشده.</i>")
     lines += [
         "",
-        "ذخیره: /save <کلید> <متن> — فراخوانی: هر جا #کلید بنویسی",
-        "مثال: /save wifi پسورد کافه 12345",
+        "<i>ذخیره: /save &lt;کلید&gt; &lt;متن&gt; — فراخوانی: هر جا #کلید بنویسی</i>",
+        "<blockquote>/save wifi پسورد کافه ۱۲۳۴۵</blockquote>",
     ]
     kb = [
         [B("📋 لیست کامل", "nt_list"), B("🗑 پاک‌کردن همه", "nt_clear")],
@@ -309,17 +380,11 @@ def page_notes(app):
 def page_sched(app):
     rows = app.db.tasks_all() or []
     lines = [
-        "⏰ **یادآورها و زمان‌بند**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• کارهای فعال: {len(rows)}",
-    ]
-    if rows:
-        lines.append("• نمونه: " + "، ".join(str(r["id"]) for r in rows[:10]))
-    lines += [
+        "⏰ <b>یادآورها و زمان‌بند</b>",
+        HR,
+        f"📋 کارهای فعال: {_fa_num(len(rows))}",
         "",
-        "یادآور: /remind 30m شیر بخر",
-        "روزانه: /daily 09:00 صبح بخیر",
-        "هفتگی: /weekly شنبه 10:00 گزارش",
+        "<blockquote>/remind 30m شیر بخر\n/daily 09:00 صبح بخیر\n/weekly شنبه 10:00 گزارش</blockquote>",
     ]
     kb = [
         [B("📋 لیست کامل", "sc_list"), B("🗑 پاک‌کردن همه", "sc_clear")],
@@ -332,15 +397,14 @@ def page_ai(app):
     url, model, masked, ok = _ai_line(app)
     host = url.split("//")[-1].split("/")[0] if url and url != "—" else "—"
     lines = [
-        "🧠 **هوش مصنوعی**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {'✅ فعال' if ok else '⛔ کلید/تنظیم نیست'}",
-        f"• سرویس: {host}",
-        f"• مدل: {model}",
-        f"• کلید: {masked}",
+        "🧠 <b>هوش مصنوعی</b>",
+        HR,
+        ("✅ فعال" if ok else "⛔ کلید/تنظیم نیست") + f" · {esc(host)}",
+        f"🤖 مدل: <code>{esc(model)}</code>",
+        f"🔑 کلید: <code>{esc(masked)}</code>",
         "",
-        "گفتگو: /ai <سوال> — خلاصه: ریپلای روی متن + /sum",
-        "ترجمه: /tr <متن> — شخصیت: /setprompt <متن>",
+        "<i>گفتگو: /ai &lt;سوال&gt; — خلاصه: ریپلای روی متن + /sum</i>",
+        "<i>ترجمه: /tr &lt;متن&gt; — شخصیت: /setprompt &lt;متن&gt;</i>",
     ]
     kb = [
         [B("🔍 تست هوشمند", "ai_test"), B("📊 وضعیت", "ai_status")],
@@ -356,19 +420,20 @@ def page_watch(app):
     except Exception:
         users = []
     on = app.s("watch_on", True)
-    names = "، ".join(str(u.get("name", f"#{u.get('id')}")) for u in users[:10]) or "—"
+    names = "، ".join(esc(str(u.get("name", f"#{u.get('id')}"))) for u in users[:10]) or "—"
     lines = [
-        "👁 **دیده‌شدن و فعالیت**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• وضعیت: {'✅ فعال' if on else '⛔ غیرفعال'}",
-        f"• افراد تحت نظر: {len(users)}",
-        f"• لیست: {names}",
+        "👁 <b>دیده‌شدن و فعالیت</b>",
+        HR,
+        ("✅ فعال" if on else "⛔ غیرفعال"),
+        f"👥 افراد تحت نظر: {_fa_num(len(users))}",
+        f"📋 لیست: {names}",
         "",
-        "ℹ️ تلگرام «دیدن پروفایل» رو به هیچ رباتی نمی‌ده (حریم خصوصی)",
-        "— ولی نزدیک‌ترین سیگنال‌های واقعی الان فعاله:",
-        "• ⌨️ کسی که داره بهت پیام خصوصی می‌نویسه",
-        "• 👁 کی پیام خصوصی‌ت رو می‌خونه",
-        "• 🟢 آنلاین‌شدن افراد لیست (افزودن: /watch add @user)",
+        "<blockquote>ℹ️ تلگرام «دیدن پروفایل» را به هیچ رباتی نمی‌دهد (حریم خصوصی)"
+        " — ولی نزدیک‌ترین سیگنال‌های واقعی فعال است:\n"
+        "⌨️ کسی که در حال تایپ پیام خصوصی است\n"
+        "👁 کسی که پیام خصوصی‌ات را می‌خواند\n"
+        "🟢 آنلاین‌شدن افراد لیست</blockquote>",
+        "<i>افزودن: /watch add @user</i>",
     ]
     kb = [
         [B("▶️ روشن" if not on else "⏹ خاموش",
@@ -381,13 +446,16 @@ def page_watch(app):
 
 def page_stats(app):
     tot = {r["direction"]: r["s"] for r in (app.db.counters_total() or [])}
+    s_in = _fa_num("{:,.0f}".format(tot.get("in", 0)))
+    s_out = _fa_num("{:,.0f}".format(tot.get("out", 0)))
     lines = [
-        "📊 **آمار**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• پیام‌های دریافتی: {tot.get('in', 0):,}",
-        f"• پیام‌های ارسالی: {tot.get('out', 0):,}",
-        f"• نوت‌ها: {len(app.db.notes_list() or [])} | کارهای زمان‌بندی: {len(app.db.tasks_all() or [])}",
-        f"• دیتابیس: {max(1, app.db.size() // 1024)}KB",
+        "📊 <b>آمار</b>",
+        HR,
+        f"📥 پیام‌های دریافتی: {s_in}",
+        f"📤 پیام‌های ارسالی: {s_out}",
+        f"📋 نوت‌ها: {_fa_num(len(app.db.notes_list() or []))}"
+        f" · ⏰ کارهای زمان‌بندی: {_fa_num(len(app.db.tasks_all() or []))}",
+        f"💾 دیتابیس: {_fa_num(max(1, app.db.size() // 1024))}KB",
     ]
     kb = [
         [B("📈 آمار کامل", "st_stats"), B("🔥 پرترافیک‌ها", "st_top")],
@@ -400,15 +468,14 @@ def page_stats(app):
 def page_settings(app):
     lang = app.s("lang", "fa") or "fa"
     lines = [
-        "⚙️ **تنظیمات**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• زبان: {'فارسی' if lang == 'fa' else 'English'}",
-        f"• حذف پیام دستور: {'روشن' if app.s('delcmd', True) else 'خاموش'}",
-        f"• پیشوند دستورات: {app.s('prefix', '.')}",
-        f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')}",
+        "⚙️ <b>تنظیمات</b>",
+        HR,
+        f"🌍 زبان: {'فارسی' if lang == 'fa' else 'English'}",
+        f"🧹 حذف پیام دستور: {'روشن' if app.s('delcmd', True) else 'خاموش'}",
+        f"⌨️ پیشوند دستورات: <code>{esc(app.s('prefix', '.'))}</code>",
+        f"🕐 منطقهٔ زمانی: <code>{esc(app.s('tz', 'Asia/Tehran'))}</code>",
         "",
-        "تغییر پیشوند/تایم‌زون: /set tz Europe/London",
-        "کلیدهای بیشتر: دکمهٔ «همهٔ تنظیمات»",
+        "<i>تغییر پیشوند/تایم‌زون: /set tz Europe/London</i>",
     ]
     kb = [
         [B("🌍 English" if lang == "fa" else "🌍 فارسی",
@@ -423,11 +490,11 @@ def page_settings(app):
 
 def page_health(app):
     lines = [
-        "🩺 **سلامت سیستم**",
-        "━━━━━━━━━━━━━━━━━━",
-        f"• آپ‌تایم شیفت: {app.uptime_str()}",
-        f"• باقی‌ماندهٔ شیفت: {app.deadline_in_str()}",
-        f"• هاست: GitHub Actions run {app.run_id or '—'}",
+        "🩺 <b>سلامت سیستم</b>",
+        HR,
+        f"⏱ آپ‌تایم شیفت: {esc(app.uptime_str())}",
+        f"⌛ باقی‌ماندهٔ شیفت: {esc(app.deadline_in_str())}",
+        f"🖥 هاست: GitHub Actions · <code>{esc(app.run_id or '—')}</code>",
     ]
     kb = [
         [B("🏓 سرعت پاسخ", "hl_ping"), B("📊 وضعیت کامل", "hl_status")],
@@ -439,16 +506,15 @@ def page_health(app):
 
 def page_help(app):
     lines = [
-        "❓ **راهنمای سریع**",
-        "━━━━━━━━━━━━━━━━━━",
+        "❓ <b>راهنمای سریع</b>",
+        HR,
         "دو راه کنترل داری:",
         "۱) همین پنل — همه‌چیز با دکمه",
-        "۲) دستور متنی: /<دستور> همین‌جا، یا .<دستور> از اکانت خودت",
+        "۲) دستور متنی: /دستور همین‌جا، یا .دستور از اکانت خودت",
         "",
-        "پرکاربردترین‌ها:",
-        "• /remind 30m یادآور • /afk دلیل • /save کلید متن",
-        "• /weather تهران • /tr متن • /calc 2+2 • /ip google.com",
-        "• /ai سوال • /status وضعیت • /restart ری‌استارت",
+        "<blockquote>/remind 30m یادآور · /afk دلیل · /save کلید متن\n"
+        "/weather تهران · /tr متن · /calc 2+2 · /ip google.com\n"
+        "/ai سوال · /status وضعیت · /restart ری‌استارت</blockquote>",
     ]
     kb = [
         [B("⌨️ همهٔ دستورات", "hp_cmds"), B("📦 ماژول‌ها", "hp_mods")],
@@ -473,20 +539,33 @@ def render_page(app, page):
 
 # ---------------------------------------------------------------- transport
 async def _send(app, chat_id, text, kb=None):
-    payload = {"chat_id": chat_id, "text": text[:4000]}
+    payload = {"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML"}
     if kb:
         payload["reply_markup"] = {"inline_keyboard": kb}
-    return await bot_api(app.http, app.manager_token, "sendMessage", payload)
+    r = await bot_api(app.http, app.manager_token, "sendMessage", payload)
+    if not r.get("ok") and "parse" in str(r.get("description") or "").lower():
+        # never lose a message to a formatting edge case
+        payload.pop("parse_mode", None)
+        r = await bot_api(app.http, app.manager_token, "sendMessage", payload)
+    return r
 
 
 async def _edit(app, chat_id, mid, text, kb=None):
-    payload = {"chat_id": chat_id, "message_id": mid, "text": text[:4000]}
+    payload = {"chat_id": chat_id, "message_id": mid, "text": text[:4000],
+               "parse_mode": "HTML"}
     if kb:
         payload["reply_markup"] = {"inline_keyboard": kb}
     r = await bot_api(app.http, app.manager_token, "editMessageText", payload)
     if not r.get("ok"):
-        # too old / deleted / not modified → fresh menu message instead
-        await _send(app, chat_id, text, kb)
+        desc = str(r.get("description") or "").lower()
+        if "parse" in desc:
+            payload.pop("parse_mode", None)
+            r = await bot_api(app.http, app.manager_token, "editMessageText", payload)
+        elif "not modified" in desc:
+            pass  # nothing changed (e.g. re-tapped the active font) — keep the message
+        else:
+            # too old / deleted → fresh menu message instead
+            await _send(app, chat_id, text, kb)
     return r
 
 
