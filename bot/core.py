@@ -519,7 +519,11 @@ class BotApp:
         from .plugins.clock import looks_like_clock
         if self.db.setting("clock_name_base") is None:
             cur = self.me.last_name or ""
-            self.db.set_setting("clock_name_base", "" if looks_like_clock(cur) else cur)
+            # v2.5.2: pass `self` so date-shaped / wordy template renders are
+            # recognized too (static regex alone missed "1405/07/15 ｜ 𝟏𝟔:𝟑𝟒"
+            # → the live clock got archived as the user's "real" name).
+            self.db.set_setting("clock_name_base",
+                                "" if looks_like_clock(cur, self) else cur)
         if self.db.setting("clock_first_base") is None:
             self.db.set_setting("clock_first_base", self.me.first_name or "")
         if self.db.setting("clock_bio_base") is None:
