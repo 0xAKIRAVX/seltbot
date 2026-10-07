@@ -192,6 +192,14 @@ async def _loop(app):
                     _last_why = why
                     iv = max(app.gov.min_gap(), int(app.s("clock_interval", 60)))
                     _next_name, _force_name = _next_after(now, why, iv, retry, off)
+                    # v2.4.1 THE phone-sync fix: a mid-minute write (boot,
+                    # .clock on/text/prefix change, reconnect) leaves <60s to
+                    # the next boundary — the governor would PACE that flip and
+                    # the profile would show a FULL STALE MINUTE. One-shot
+                    # force it (only while healthy; FloodWait/backoff still rule).
+                    if why == "ok" and app.gov.healthy() \
+                            and _next_name - now < app.gov.effective_interval(_target_field(app)):
+                        _force_name = True
             if not app.module_off("clock") and app.s("clock_bio_on", False):
                 if now >= _next_bio:
                     text_fn = (lambda: _render_bio(app))
@@ -199,6 +207,9 @@ async def _loop(app):
                                                          force=_force_bio)
                     iv = max(60, int(app.s("clock_bio_interval", 60)))
                     _next_bio, _force_bio = _next_after(now, why, iv, retry, off)
+                    if why == "ok" and app.gov.healthy() \
+                            and _next_bio - now < app.gov.effective_interval("bio"):
+                        _force_bio = True
             if now >= _next_verify:
                 _next_verify = now + 300
                 if app.s("clock_on", True) or app.s("clock_bio_on", False):
