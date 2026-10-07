@@ -5,10 +5,21 @@
   .set ai_key sk-...
   .set ai_model gpt-4o-mini
 یا از طریق secrets ریپو: AI_API_URL / AI_API_KEY / AI_MODEL
+
+v2.3 fixes:
+  • request TIMEOUT (was: aiohttp default 5min → user saw endless "🧠 …")
+  • automatic model FAILOVER: free OpenRouter models rotate/die constantly
+    (ultra-550b → 'Service temporarily overloaded'); we now retry on a
+    fallback chain so AI keeps working without redeploying secrets
+  • reasoning models (nemotron ultra) spill English chain-of-thought into
+    content → we ask OpenRouter to exclude reasoning for those
 """
+import asyncio
 import logging
 import os
 import re
+
+import aiohttp
 
 from ..core import command
 
@@ -17,6 +28,15 @@ log = logging.getLogger("seltbot.ai")
 ENV_URL = os.environ.get("AI_API_URL", "").rstrip("/")
 ENV_KEY = os.environ.get("AI_API_KEY", "")
 ENV_MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
+
+# fallback chain used when the configured model errors/overloads/empties.
+# order = current known-good free models first.
+FALLBACK_MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+]
 
 
 def _cfg(app):
@@ -31,16 +51,42 @@ def _configured(app):
     return bool(url and key)
 
 
-async def _chat(app, hist, max_tokens=800):
-    url, key, model = _cfg(app)
+async def _try_model(app, url, key, model, hist, max_tokens):
+    """One attempt against one model. Returns content or raises."""
     payload = {"model": model, "messages": hist,
                "temperature": 0.7, "max_tokens": max_tokens}
-    async with app.http.post(url + "/chat/completions", json=payload,
-                             headers={"Authorization": f"Bearer {key}"}) as r:
+    if "openrouter" in url.lower():
+        # strips chain-of-thought from reasoning models; ignored otherwise
+        payload["reasoning"] = {"exclude": True}
+    async with app.http.post(
+            url + "/chat/completions", json=payload,
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=aiohttp.ClientTimeout(total=90)) as r:
         data = await r.json()
-    if not data.get("choices"):
-        raise RuntimeError(str(data.get("error") or data)[:200])
-    return data["choices"][0]["message"]["content"]
+    ch = (data.get("choices") or [{}])[0]
+    content = ((ch.get("message") or {}).get("content") or "").strip()
+    if not content:
+        err = data.get("error")
+        err = (err.get("message") if isinstance(err, dict) else err) or \
+            f"empty content (finish={ch.get('finish_reason')})"
+        raise RuntimeError(str(err)[:200])
+    return content
+
+
+async def _chat(app, hist, max_tokens=1000):
+    """Chat completion with automatic failover across free models."""
+    url, key, model = _cfg(app)
+    models = [model] + [m for m in FALLBACK_MODELS if m != model]
+    errs = []
+    for m in models[:3]:                       # configured + 2 fallbacks
+        try:
+            return await _try_model(app, url, key, m, hist, max_tokens)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            errs.append(f"{m.rsplit('/', 1)[-1]}: {str(e)[:90]}")
+            log.warning("AI model %s failed: %s", m, e)
+    raise RuntimeError(" | ".join(errs))
 
 
 def _howto(app):
