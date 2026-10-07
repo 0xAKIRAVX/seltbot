@@ -43,13 +43,13 @@ async def filter_cmd(app, ev, arg):
         await ev.reply("❌ مثال: `.filter سلام -> سلام علیکم بچه‌ها`")
         return
     word, reply = m[0].strip().lower(), m[1].strip()
-    app.db.filter_add(event.chat_id, word, reply)
+    app.db.filter_add(ev.chat_id, word, reply)
     await ev.reply(f"✅ فیلتر اضافه شد: «{word}» → جواب می‌دم.")
 
 
 @command("filters", "filters", "", "لیست فیلترهای این چت", "List filters for this chat")
 async def filters_cmd(app, ev, arg):
-    rows = app.db.filters_list(event.chat_id)
+    rows = app.db.filters_list(ev.chat_id)
     if not rows:
         rows_all = app.db.filters_list()
         await ev.reply(app.t("empty") if not rows_all
@@ -65,11 +65,11 @@ async def stop_cmd(app, ev, arg):
     if not arg.strip():
         await ev.reply(app.t("no_arg"))
         return
-    await ev.reply(app.t("deleted") if app.db.filter_del(event.chat_id, arg.strip().lower())
+    await ev.reply(app.t("deleted") if app.db.filter_del(ev.chat_id, arg.strip().lower())
                    else app.t("not_found"))
 
 
 @command("stopfilters", "filters", "", "پاک‌کردن فیلترهای این چت", "Clear chat filters")
 async def stopfilters_cmd(app, ev, arg):
-    app.db.filters_clear(event.chat_id)
+    app.db.filters_clear(ev.chat_id)
     await ev.reply("🗑 فیلترهای این چت پاک شد.")
