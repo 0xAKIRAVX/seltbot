@@ -197,8 +197,11 @@ async def _loop(app):
                     # the next boundary — the governor would PACE that flip and
                     # the profile would show a FULL STALE MINUTE. One-shot
                     # force it (only while healthy; FloodWait/backoff still rule).
+                    # The 0.5s tolerance keeps exact-boundary steady writes
+                    # UNforced so a FloodWait can never escalate.
                     if why == "ok" and app.gov.healthy() \
-                            and _next_name - now < app.gov.effective_interval(_target_field(app)):
+                            and _next_name - now < app.gov.effective_interval(
+                                _target_field(app)) - 0.5:
                         _force_name = True
             if not app.module_off("clock") and app.s("clock_bio_on", False):
                 if now >= _next_bio:
