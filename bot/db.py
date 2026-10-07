@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS sudoers (user_id INTEGER PRIMARY KEY, added INTEGER);
 CREATE TABLE IF NOT EXISTS blocked (user_id INTEGER PRIMARY KEY, added INTEGER);
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT, value TEXT);
+CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trig TEXT, tval TEXT, act TEXT, aval TEXT,
+    enabled INTEGER DEFAULT 1, hits INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS photos (id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT, data TEXT, added INTEGER);
 """
@@ -258,6 +261,32 @@ class DB:
 
     def alerts_all(self):
         return self.conn.execute("SELECT * FROM alerts ORDER BY id").fetchall()
+
+    # ---------- IF-THEN rules ----------
+    def rule_add(self, trig, tval, act, aval):
+        cur = self.conn.execute(
+            "INSERT INTO rules(trig,tval,act,aval,enabled,hits) VALUES(?,?,?,?,1,0)",
+            (trig, tval, act, aval))
+        return cur.lastrowid
+
+    def rules_all(self):
+        return self.conn.execute(
+            "SELECT * FROM rules ORDER BY id LIMIT 100").fetchall()
+
+    def rule_del(self, rid):
+        cur = self.conn.execute("DELETE FROM rules WHERE id=?", (rid,))
+        return cur.rowcount > 0
+
+    def rules_clear(self):
+        self.conn.execute("DELETE FROM rules")
+
+    def rule_hit(self, rid):
+        self.conn.execute("UPDATE rules SET hits=hits+1 WHERE id=?", (rid,))
+
+    def rule_toggle(self, rid, on):
+        cur = self.conn.execute("UPDATE rules SET enabled=? WHERE id=?",
+                                (1 if on else 0, rid))
+        return cur.rowcount > 0
 
     # ---------- photos ----------
     def photo_add(self, name, data):
