@@ -1,13 +1,30 @@
-"""AFK system: auto-reply with duration, reason, per-user cooldown, auto-return."""
+"""AFK system: auto-reply with duration, reason, per-user cooldown, auto-return.
+
+v2.4: redesigned reply message (clean structure + humanized durations) and
+added `.afktext` so the owner can fully customize the template.
+"""
 import asyncio
+import datetime
 import logging
 import random
+import re
 import time
 
 from .. import jalali
 from ..core import command, incoming_hook, outgoing_hook
 
 log = logging.getLogger("seltbot.afk")
+
+AFK_TOKENS_HELP = (
+    "🧩 توکن‌های قالب پیام AFK:\n"
+    "`{name}` → اسم طرف (کلیک‌شده)\n"
+    "`{dur}` → مدت نبودن — خودکار «همین الان» / «۵ دقیقه» / «۲ ساعت و ۱۷ دقیقه»\n"
+    "`{time}` → ساعت رفتن (مثل ۱۴:۰۲)\n"
+    "`{reason}` → دلیل AFK (اگه گفته باشی؛ اگه نداده باشی این خط خودش حذف می‌شه)\n\n"
+    "مثال:\n"
+    "💤 {name} جان نیستم\n⏱ {dur} رفتم (ساعت {time})\n📝 {reason}\n\n"
+    "برگردوندن قالب پیش‌فرض: `.afktext reset`"
+)
 
 
 def _state(app):
@@ -18,6 +35,70 @@ def _set(app, st):
     app.db.set_setting("afk", st)
 
 
+def _dur_display(app, dur_s):
+    """Humanized: 'همین الان' for fresh AFK instead of the silly '۳ ثانیه'."""
+    if dur_s < 90:
+        return "همین الان" if app.fa else "just now"
+    return jalali.fmt_dur(dur_s, fa=app.fa)
+
+
+def _build_afk_text(app, name, dur_s, since_ts, reason):
+    """Render the AFK auto-reply: default (structured, pretty) or custom
+    template from .afktext with {name}/{dur}/{time}/{reason} tokens."""
+    since_ts = since_ts or time.time()
+    try:
+        hm = datetime.datetime.fromtimestamp(since_ts, app.tzinfo).strftime("%H:%M")
+    except Exception:
+        hm = datetime.datetime.now(app.tzinfo).strftime("%H:%M")
+    if app.fa:
+        hm = jalali.fa_digits(hm)
+    dur = _dur_display(app, dur_s)
+    reason = (reason or "").strip()
+
+    tpl = str(app.s("afk_text", "") or "")
+    if tpl:
+        if not reason:
+            # drop lines that only carried the reason token
+            tpl = "\n".join(ln for ln in tpl.split("\n") if "{reason}" not in ln)
+        out = (tpl.replace("{name}", str(name))
+                  .replace("{dur}", dur)
+                  .replace("{time}", hm)
+                  .replace("{reason}", reason))
+        out = re.sub(r"\n{3,}", "\n\n", out)
+        return out.strip()
+
+    # default template — assembled so structure stays tidy in every case
+    if app.fa:
+        durline = (f"همین الان رفتم (ساعت {hm})" if dur_s < 90 else
+                   f"مدت نبودنم: {dur} — رفتن ساعت {hm}")
+        lines = [
+            f"💤 {name} جان، الان پیش نیستم",
+            "━━━━━━━━━━━━━━━━",
+            f"⏱ {durline}",
+        ]
+        if reason:
+            lines.append(f"📝 دلیل: {reason}")
+        lines += [
+            "",
+            "📬 پیامت پیشم می‌مونه — به محض برگشتن جواب می‌دم ✌️",
+        ]
+        return "\n".join(lines)
+    durline = (f"left just now ({hm})" if dur_s < 90 else
+               f"away for {dur} — since {hm}")
+    lines = [
+        f"💤 {name}, I'm away right now",
+        "━━━━━━━━━━━━━━━━",
+        f"⏱ {durline}",
+    ]
+    if reason:
+        lines.append(f"📝 {reason}")
+    lines += [
+        "",
+        "📬 Your message is saved — I'll reply as soon as I'm back ✌️",
+    ]
+    return "\n".join(lines)
+
+
 @command("afk", "afk", "[دلیل]", "فعال‌کردن AFK", "Enable AFK mode", bot_ok=True)
 async def afk_cmd(app, ev, arg):
     st = _state(app)
@@ -26,7 +107,8 @@ async def afk_cmd(app, ev, arg):
     _set(app, st)
     if app.fa:
         msg = "💤 AFK روشن شد." + (f"\n📝 دلیل: {arg.strip()}" if arg.strip() else "")
-        msg += "\nهر کی پیام بده خودم جواب می‌دم و مدت رو می‌گم."
+        msg += "\nبه هر کی پیام بده، خودم با مدت و ساعت رفتنم جواب می‌دم."
+        msg += "\n🎨 برای شخصی‌سازی قالب پیام: `.afktext`"
     else:
         msg = "💤 AFK enabled." + (f"\n📝 {arg.strip()}" if arg.strip() else "")
     await ev.reply(msg)
@@ -50,6 +132,25 @@ async def afkstatus_cmd(app, ev, arg):
     dur = jalali.fmt_dur(time.time() - st.get("since", time.time()), fa=app.fa)
     await ev.reply(f"💤 AFK فعال — مدت: {dur} • جواب‌های خودکار: {st.get('hits', 0)}"
                    + (f"\n📝 {st.get('reason', '')}" if st.get("reason") else ""))
+
+
+@command("afktext", "afk", "<قالب>", "قالب پیام AFK (شخصی‌سازی)",
+         "Custom AFK reply template", bot_ok=True)
+async def afktext_cmd(app, ev, arg):
+    a = arg.strip()
+    if not a:
+        cur = str(app.s("afk_text", "") or "")
+        head = ("قالب فعلی (پیش‌فرضِ مرتب):") if not cur else ("قالب فعلی:\n`" + cur + "`")
+        await ev.reply(head + "\n\n" + AFK_TOKENS_HELP if not cur else head + "\n\n" + AFK_TOKENS_HELP)
+        return
+    if a.lower() in ("reset", "ریست", "پیش‌فرض", "default"):
+        app.dels("afk_text")
+        await ev.reply("✅ قالب پیام AFK به پیش‌فرضِ مرتب برگشت.")
+        return
+    app.sets("afk_text", a)
+    sample = _build_afk_text(app, "Zahra", 305, time.time() - 305,
+                             "فعلاً در دسترس نیستم")
+    await ev.reply("✅ قالب ذخیره شد. نمونه:\n\n" + sample + "\n\n" + AFK_TOKENS_HELP)
 
 
 async def _return(app, ev, st):
@@ -99,19 +200,11 @@ async def afk_incoming(app, event):
     app.db.touch_seen(sid, "afk")
     st["hits"] = st.get("hits", 0) + 1
     _set(app, st)
-    dur = jalali.fmt_dur(time.time() - st.get("since", time.time()), fa=app.fa)
-    reason = st.get("reason") or ""
+    since = st.get("since", time.time())
+    dur_s = time.time() - since
+    reason = (st.get("reason") or "").strip()
     name = app.user_link(sender, plain=False)
-    if app.fa:
-        txt = f"{name} جان، من الان AFK هستم 💤\n⏱ مدت: {dur}"
-        if reason:
-            txt += f"\n📝 {reason}"
-        txt += "\nبه محض برگشتم جواب می‌دم ✌️"
-    else:
-        txt = f"{name}, I'm AFK right now 💤\n⏱ Away for: {dur}"
-        if reason:
-            txt += f"\n📝 {reason}"
-        txt += "\nI'll get back to you soon."
+    txt = _build_afk_text(app, name, dur_s, since, reason)
     try:
         await asyncio.sleep(random.uniform(1.5, 4.0))
         m = await event.reply(txt)
