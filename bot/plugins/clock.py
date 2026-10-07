@@ -37,6 +37,97 @@ def _digit_fn(style):
     return ent[1] if ent else (lambda s: s)
 
 
+# v2.7 — «ساعت ماتریسی متحرک». Telegram profile names are STATIC text:
+# no real frame-rate animation exists, and writing faster than once a minute
+# would violate the anti-ban pacing (hard requirement). What IS possible —
+# safely, at zero extra API writes: change the glyphs every minute, riding
+# the normal clock flip. Three moving parts: a rotating braille spinner,
+# glitch-mixed digit fonts, and a filling hour progress bar.
+MATRIX_TEMPLATE = "{spin}｜ {gtime} {hbar}"
+_SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"      # terminal spinner, one frame per minute
+_GLITCH_FONTS = (jalali.mono_digits, jalali.bold_digits,
+                 jalali.double_digits, jalali.full_digits,
+                 jalali.serif_digits)
+
+
+def _spin_frame(dt):
+    """Spinner frame for this minute (full rotation every 10 minutes)."""
+    return _SPIN_FRAMES[dt.minute % 10]
+
+
+def _glitch_time(dt):
+    """Matrix «digital rain» time: every digit picks its font family from a
+    seed that advances each minute — the digits visibly re-style themselves
+    on every flip. Self-animating (ignores clock_digits on purpose: the mix
+    IS the effect). Deterministic within a minute (idempotent writes)."""
+    s = f"{dt.hour:02d}:{dt.minute:02d}"
+    seed = dt.hour * 60 + dt.minute
+    out = []
+    for i, ch in enumerate(s):
+        if ch.isdigit():
+            fn = _GLITCH_FONTS[(seed + i * 3) % len(_GLITCH_FONTS)]
+            out.append(fn(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _progress_bar(frac, blocks=12):
+    filled = max(0, min(blocks, int(round(frac * blocks))))
+    return "▓" * filled + "░" * (blocks - filled)
+
+
+def _hour_bar(dt):
+    """▓▓▓▓░░░░░░░░ — how far into the current hour (one block ≈ 5 min)."""
+    return _progress_bar((dt.minute * 60 + dt.second) / 3600.0)
+
+
+def _day_bar(dt):
+    """▓▓░░░░░░░░░░ — how far into the current day."""
+    return _progress_bar((dt.hour * 3600 + dt.minute * 60 + dt.second) / 86400.0)
+
+
+def _phase_emoji(dt):
+    """☀️/🌤/🌇/🌙 by local hour — day/night indicator token."""
+    h = dt.hour
+    if 5 <= h < 12:
+        return "☀️"
+    if 12 <= h < 17:
+        return "🌤"
+    if 17 <= h < 20:
+        return "🌇"
+    return "🌙"
+
+
+def _parse_since(text):
+    """v2.7 — parse the `.clock since` date: Jalali «1405/7/15» (year < 1700)
+    or Gregorian «2026-10-07» / «2026.10.7»; accepts fa-digits. Returns ISO
+    "YYYY-MM-DD" or None when invalid."""
+    s = jalali.to_en_digits(str(text or "").strip()).replace(".", "/").replace("-", "/")
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        if y < 1700:                       # Jalali year → Gregorian
+            if not (1 <= mo <= 12 and 1 <= d <= 31):
+                return None
+            y, mo, d = jalali.j2g(y, mo, d)
+        return datetime.date(y, mo, d).isoformat()
+    except Exception:
+        return None
+
+
+def _days_since(app, dt):
+    """Whole days between `.clock since` date and dt (floor, never negative).
+    «—» when no start date is set."""
+    try:
+        d0 = datetime.date.fromisoformat(str(app.s("clock_since", "") or ""))
+        return str(max(0, (dt.date() - d0).days))
+    except Exception:
+        return "—"
+
+
 # v2.6 — «حذف تاریخ» (owner: "یه گزینه حذف تاریخ بزار که بتونم از پروفایلم
 # تاریخ رو پاک کنم"). These are every token (and icon) that renders a DATE
 # part; the rest of the template (clock, dividers, {name}) must survive.
@@ -109,7 +200,16 @@ TOKENS_HELP_FA = """🧩 توکن‌های قالب (ارقام همه با فو
 `{h12}:{mm} {ampm}` → 4:45 ب.ظ
 `{WD} {day} {Mon} {year}` → Thursday 7 October 2026
 `{name}` → اسم/بیوی اصلیت
+
+🌀 توکن‌های متحرک (هر دقیقه عوض می‌شن — ماتریکس):
+`{spin}` → ⠋ اسپینر چرخان (می‌چرخه ⠋→⠙→⠹)
+`{gtime}` → 𝟶𝟑:𝟺𝟒 ساعت گلیچی — فونت هر رقم هر دقیقه می‌رقصه
+`{hbar}` → ▓▓▓▓░░░░ نوار پیشرفت ساعت | `{dbar}` → نوار پیشرفت روز
+`{phase}` → ☀️/🌙 بر اساس شب‌وروز
+`{days}` → شمارش روز از تاریخ (`.clock since 1405/7/15`)
+
 مثال: `.clock text {jdate} ｜ {hhm}:{mmm}`
+ماتریکس یک‌کلیکی: `.clock matrix` (خاموشش: `.clock matrix off`)
 فونت ارقام: `.clock digits` (بولد/فارسی/مونو/توخالی/کلاسیک/عریض/ساده)
 حذف تاریخ (فقط ساعت بمونه): `.clock nodate`"""
 
@@ -185,6 +285,16 @@ def render(app, template, dt):
         "jWD": jalali.WD_FA[dt.weekday()],
         "jdate": st(f"{jy}/{jm:02d}/{jd:02d}"),
         "jdatefa": jalali.fa_digits(f"{jy}/{jm:02d}/{jd:02d}"),
+        # v2.7 — matrix/animated tokens. All are minute-stable (identical
+        # within a minute → idempotent writes) but minute-ADVANCING (the
+        # visible "motion"), and they ride the existing once-per-minute
+        # flip — zero extra profile writes, anti-ban pacing untouched.
+        "spin": _spin_frame(dt),
+        "gtime": _glitch_time(dt),
+        "hbar": _hour_bar(dt),
+        "dbar": _day_bar(dt),
+        "phase": _phase_emoji(dt),
+        "days": st(_days_since(app, dt)),
     }
     out = template
     for k, v in toks.items():
@@ -403,7 +513,7 @@ def _fmt_ts(app, ts):
     return app.now().fromtimestamp(ts, app.tzinfo).strftime("%H:%M:%S")
 
 
-@command("clock", "clock", "[on/off/text/nodate/interval/tz/target/offset/digits/bio/status]",
+@command("clock", "clock", "[on/off/text/nodate/matrix/since/interval/tz/target/offset/digits/bio/status]",
          "ساعت زندهٔ کنار اسم/بیو + تنظیمات", "Live clock in name/bio + settings",
          aliases=("clockname",))
 async def clock_cmd(app, ev, arg):
@@ -440,6 +550,10 @@ async def clock_cmd(app, ev, arg):
     elif sub in ("nodate", "no-date", "dateoff", "date-off", "بدون تاریخ",
                  "بدون-تاریخ", "حذف تاریخ", "حذف-تاریخ", "حذف"):
         await _clock_nodate(app, ev)
+    elif sub in ("matrix", "ماتریکس", "ماتریک"):
+        await _clock_matrix(app, ev, rest)
+    elif sub == "since":
+        await _clock_since(app, ev, rest)
     elif sub == "interval":
         try:
             v = int(jalali.to_en_digits(rest))
@@ -515,7 +629,6 @@ async def clock_cmd(app, ev, arg):
 
 async def _clock_digits(app, ev, rest):
     """v2.5 — show/switch the clock digit font (7 styles)."""
-    global _next_name
     cur = app.s("clock_digits", DEFAULT_DIGITS) or DEFAULT_DIGITS
     sample = f"{app.now().hour:02d}:{app.now().minute:02d}"
     if rest:
@@ -573,6 +686,79 @@ async def _clock_nodate(app, ev):
     await ev.reply(msg + note + "\n" + _profile_preview(app) + hint)
 
 
+async def _clock_matrix(app, ev, rest):
+    """v2.7 — one tap «ساعت ماتریسی متحرک»: preset template with a rotating
+    braille spinner, glitch-mixed digit fonts and an hour progress bar. All
+    three change EVERY minute, riding the normal clock flip (zero extra API
+    writes — anti-ban pacing untouched). `matrix off` restores the previous
+    look, date-stripped (the owner's standing «no date» choice is kept)."""
+    arg = (rest or "").strip().lower()
+    on = bool(app.s("clock_matrix_on", False))
+    if arg in ("off", "خاموش", "بستن"):
+        want = False
+    elif arg in ("on", "روشن", ""):
+        want = True
+    else:
+        want = not on                      # bare `.clock matrix` toggles
+    if want and not on:
+        prev = app.s("clock_template", DEFAULT_TEMPLATE) or DEFAULT_TEMPLATE
+        app.sets("clock_matrix_prev", prev)
+    if want:
+        app.sets("clock_matrix_on", True)
+        app.sets("clock_template", MATRIX_TEMPLATE)
+    else:
+        app.sets("clock_matrix_on", False)
+        prev = app.s("clock_matrix_prev", "") or ""
+        app.sets("clock_template", _strip_date(prev) or DEFAULT_TEMPLATE)
+    note = await _apply_feedback(app)
+    if want:
+        msg = ("🌀 حالت ماتریکس روشن شد!\n"
+               "هر دقیقه سه چیز عوض می‌شه: اسپینر می‌چرخه ⠋→⠙→⠹، فونت ارقام"
+               " می‌رقصه (گلیچ دیجیتال) و نوار پیشرفت ساعت پُر می‌شه ▓.\n"
+               "ⓘ اسم پروفایل تلگرام متن ثابته و انیمیشن واقعی نداره — این"
+               " امن‌ترین شکل «متحرک» ممکنه: هر دقیقه، روی همون تیکِ همیشگی"
+               " ساعت، بدون حتی یک نوشتنِ اضافه (ریسک بن صفر).")
+    else:
+        msg = "🌀 حالت ماتریکس خاموش شد — قالب قبلی (بدون تاریخ) برگشت."
+    await ev.reply(msg + note + "\n" + _profile_preview(app))
+
+
+async def _clock_since(app, ev, rest):
+    """v2.7 — `{days}` شمارش روز: `.clock since 1405/7/15` (شمسی یا میلادی).
+    محبوب برای «روز X بدون ...» کنار ساعت."""
+    rest = (rest or "").strip()
+    cur = app.s("clock_since", "") or ""
+    if rest.lower() in ("off", "حذف", "پاک"):
+        if cur:
+            app.dels("clock_since")
+        await ev.reply("🗑 شمارش روز حذف شد.")
+        return
+    if not rest:
+        if cur:
+            await ev.reply(
+                f"📅 شمارش روز فعال: از {cur}\n"
+                f"امروز روز {_days_since(app, app.now())} است.\n"
+                "توکنش `{days}` — مثل: `.clock text روز {{days}} ｜ {{hhm}}:{{mmm}}`\n"
+                "حذف: `.clock since off`")
+        else:
+            await ev.reply(
+                "📆 شمارش روز — تاریخ شروع رو بده (شمسی یا میلادی):\n"
+                "`.clock since 1405/7/15` ← شمسی\n"
+                "`.clock since 2026-10-07` ← میلادی\n"
+                "بعد با توکن `{days}` توی قالب ساعت استفاده‌ش کن:\n"
+                "`.clock text روز {days} ｜ {hhm}:{mmm}`")
+        return
+    iso = _parse_since(rest)
+    if not iso:
+        await ev.reply("❌ فرمت تاریخ درست نیست — مثال‌ها: `1405/7/15` یا `2026-10-07`")
+        return
+    app.sets("clock_since", iso)
+    await ev.reply(
+        f"✅ شمارش روز از {iso} ست شد — امروز روز {_days_since(app, app.now())} است.\n"
+        "نمونه‌ش رو ببین: `روز " + _days_since(app, app.now()) + "` — با دستور"
+        " `.clock text روز {days} ｜ {hhm}:{mmm}` بچسبونش کنار ساعت.")
+
+
 async def _clock_bio(app, ev, rest):
     global _next_bio
     parts = rest.split(None, 1)
@@ -605,7 +791,7 @@ async def _clock_status(app, ev):
     nxt = max(0, int(_next_name - time.time())) if app.s("clock_on", True) else None
     lines = [
         "🕐 **وضعیت ساعت**",
-        f"• وضعیت: " + ("✅ روشن" if app.s("clock_on", True) else "⛔ خاموش"),
+        "• وضعیت: " + ("✅ روشن" if app.s("clock_on", True) else "⛔ خاموش"),
         f"• هدف: {'اسم اول' if _target_field(app) == 'first_name' else 'اسم آخر'}"
         + (" + بیو" if app.s("clock_bio_on", False) else ""),
         f"• قالب: `{app.s('clock_template', DEFAULT_TEMPLATE)}`"
@@ -614,6 +800,10 @@ async def _clock_status(app, ev):
         f"• نمونه: {_render_name(app)}",
         f"• فاصله: {app.s('clock_interval', 60)}s (بیو: {app.s('clock_bio_interval', 60)}s)",
         f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {DIGIT_STYLES.get(app.s('clock_digits', DEFAULT_DIGITS) or DEFAULT_DIGITS, ('?',))[0]}",
+        "• 🌀 ماتریکس: " + ("✅ فعال (متحرک هر دقیقه)" if app.s("clock_matrix_on", False)
+                             else "⛔ خاموش (`.clock matrix`)"),
+        (f"• 📆 شمارش روز: روز {_days_since(app, app.now())} از {app.s('clock_since', '')}"
+         if app.s("clock_since", "") else "• 📆 شمارش روز: ⛔ (`.clock since 1405/7/15`)"),
         f"• کالیبره با گوشی: {off:+d} ثانیه"
         + (" (`.clock offset` برای تنظیم)" if not off else ""),
         f"• آپدیت بعدی: {jalali.fmt_dur(nxt, fa=True) if nxt is not None else '—'}",
