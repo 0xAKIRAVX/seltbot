@@ -60,7 +60,7 @@ jobs:
           RUN_DEADLINE: ${{ steps.deadline.outputs.ts }}
         run: |
           set +e
-          timeout --signal=SIGTERM --kill-after=30 20670 python seltbot.py
+          timeout --signal=SIGTERM --kill-after=30 20670 python -u seltbot.py
           rc=$?
           set -e
           if [ "$rc" -eq 124 ]; then
