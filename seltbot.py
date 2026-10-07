@@ -268,7 +268,8 @@ async def amain(mode_once=False):
         if mode_once:
             await app.run()
             from bot.plugins.clock import _render_name, _target_field
-            ok, _, why = await app.gov.apply(_target_field(app), _render_name(app),
+            ok, _, why = await app.gov.apply(_target_field(app),
+                                             lambda: _render_name(app),
                                              force=True)
             log.info("once: clock apply → %s (%s)", "OK" if ok else "SKIP", why)
             await app.graceful("once")
@@ -530,6 +531,43 @@ def selftest():
     assert not wmod._throttled("typing", 7, t0 + 301)     # after window → fires
     assert not wmod._throttled("read", 7, t0)             # independent kind
     print("[13] watcher OK (peer filter + throttle; typing/read/online events)")
+
+    # [14] v2.4: clock offset calibration + AFK template
+    from bot.plugins import clock as clockmod, afk as afkmod
+    base = 1791373260.83                      # not on a boundary
+    for off in (-75, 0, 40):
+        nxt = clockmod._align_next(base, 60, off)
+        # flip must land when (true+off) crosses a boundary, +0.3s safety
+        assert abs(((nxt + off) % 60) - 0.3) < 1e-6, (off, nxt)
+        assert nxt > base
+    # render must shift with the offset (same minute unless straddling)
+    class OffShim:
+        fa = True
+        tzinfo = ZoneInfo("Asia/Tehran")
+        def now(self):
+            return datetime.datetime.now(self.tzinfo)
+        def s(self, k, d=None):
+            return {"clock_offset": 90, "clock_digits": "mono",
+                    "clock_name_base": "T"}.get(k, d)
+    assert clockmod._offset(OffShim()) == 90
+    class AfkShim:
+        fa = True
+        tzinfo = ZoneInfo("Asia/Tehran")
+        def now(self):
+            return datetime.datetime.now(self.tzinfo)
+        def s(self, k, d=None):
+            return {"afk_text": ""}.get(k, d)
+    at = afkmod._build_afk_text(AfkShim(), "Zahra", 305,
+                                 time.time() - 305, "در حال استراحت")
+    assert "Zahra" in at and "💤" in at and "در حال استراحت" in at \
+        and "━━" in at and "۵ دقیقه" in at, at
+    at2 = afkmod._build_afk_text(AfkShim(), "Zahra", 30, time.time(), "")
+    assert "همین الان" in at2 and "دلیل" not in at2 and "━━" in at2, at2
+    at3 = afkmod._build_afk_text(AfkShim(), "Zahra", 500, time.time() - 500,
+                                  "")
+    assert "دلیل" not in at3, at3
+    print("[14] v2.4 OK (clock offset math ±300s, fresh-render callables, "
+          "structured AFK template + humanized durations + .afktext)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
