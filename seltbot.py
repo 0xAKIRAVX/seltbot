@@ -153,12 +153,22 @@ async def manager_bot_loop(app):
     offset = 0
     while not app.stopping:
         try:
+            # ⚠️ allowed_updates MUST be explicit: the persisted server-side
+            # setting was locked to ["message"] by the old clock repo poller,
+            # which silently filtered out EVERY callback_query → glass buttons
+            # appeared dead. Passing it on every call re-subscribes us.
             res = await bot_api(app.http, app.manager_token, "getUpdates",
-                                {"timeout": 25, "offset": offset}, timeout=30)
+                                {"timeout": 25, "offset": offset,
+                                 "allowed_updates": ["message", "edited_message",
+                                                     "callback_query"]},
+                                timeout=30)
             for u in res.get("result", []):
                 offset = u["update_id"] + 1
                 cbq = u.get("callback_query")
                 if cbq:
+                    log.info("menu: button %s pressed by %s",
+                             (cbq.get("data") or "?")[:24],
+                             (cbq.get("from") or {}).get("id"))
                     asyncio.ensure_future(menumod.handle_callback(app, cbq))
                     continue
                 m = u.get("message") or u.get("edited_message") or {}
@@ -168,6 +178,7 @@ async def manager_bot_loop(app):
                 frm = m.get("from") or {}
                 chat = m.get("chat") or {}
                 uid = frm.get("id")
+                log.info("manager: %r from user %s", text[:48], uid)
                 if not app.authorized(uid):
                     if uid:
                         log.warning("manager cmd from unauthorized user %s", uid)
