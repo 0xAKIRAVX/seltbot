@@ -117,6 +117,25 @@ _next_name = 0.0
 _next_bio = 0.0
 _next_verify = 0.0
 _last_why = "init"
+_force_name = False    # realign flag: force next boundary-window write
+_force_bio = False
+
+
+def _next_after(now, why, iv, retry):
+    """Decide (next_ts, force_next) after a governor result.
+
+    ok/same/keep → align to the next interval boundary (flip just after the
+    minute change).  pace → the previous write landed mid-minute (e.g. the
+    boot write or a flood-recovery write): wait for the NEXT boundary and
+    force the write there, so the flip phase can never lock mid-minute —
+    a locked mid-minute phase is exactly what made the clock flip late.
+    flood/budget/error → timed retry (phase self-heals via pace→force later).
+    """
+    if why == "pace":
+        return _align_next(now, iv), True
+    if why in ("ok", "same", "keep"):
+        return _align_next(now, iv), False
+    return now + max(5, min(retry or 30, 600)), False
 
 
 async def start(app):
@@ -130,29 +149,25 @@ async def stop(app):
 
 
 async def _loop(app):
-    global _next_name, _next_bio, _next_verify, _last_why
+    global _next_name, _next_bio, _next_verify, _last_why, _force_name, _force_bio
     while not app.stopping:
         try:
             now = time.time()
             if not app.module_off("clock") and app.s("clock_on", True):
                 if now >= _next_name:
                     text = _render_name(app)
-                    ok, retry, why = await app.gov.apply(_target_field(app), text)
+                    ok, retry, why = await app.gov.apply(_target_field(app), text,
+                                                         force=_force_name)
                     _last_why = why
-                    if ok or why in ("same", "keep"):
-                        iv = max(app.gov.min_gap(), int(app.s("clock_interval", 60)))
-                        _next_name = _align_next(now, iv)
-                    else:
-                        _next_name = now + max(5, min(retry or 30, 600))
+                    iv = max(app.gov.min_gap(), int(app.s("clock_interval", 60)))
+                    _next_name, _force_name = _next_after(now, why, iv, retry)
             if not app.module_off("clock") and app.s("clock_bio_on", False):
                 if now >= _next_bio:
                     text = _render_bio(app)
-                    ok, retry, why = await app.gov.apply("bio", text)
-                    if ok or why in ("same", "keep"):
-                        iv = max(60, int(app.s("clock_bio_interval", 60)))
-                        _next_bio = _align_next(now, iv)
-                    else:
-                        _next_bio = now + max(5, min(retry or 30, 600))
+                    ok, retry, why = await app.gov.apply("bio", text,
+                                                         force=_force_bio)
+                    iv = max(60, int(app.s("clock_bio_interval", 60)))
+                    _next_bio, _force_bio = _next_after(now, why, iv, retry)
             if now >= _next_verify:
                 _next_verify = now + 300
                 if app.s("clock_on", True) or app.s("clock_bio_on", False):
