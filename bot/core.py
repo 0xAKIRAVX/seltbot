@@ -69,6 +69,38 @@ def outgoing_hook():
     return deco
 
 
+class BotReply:
+    """Editable handle for a manager-bot message — mirrors Telethon
+    Message.edit/delete so placeholder-edit patterns work from the menu too."""
+
+    def __init__(self, app, chat_id, message_id):
+        self.app = app
+        self.chat_id = chat_id
+        self.message_id = message_id
+
+    async def edit(self, text, **kw):
+        text = str(text)[:4000]
+        r = await bot_api(self.app.http, self.app.manager_token, "editMessageText",
+                          {"chat_id": self.chat_id, "message_id": self.message_id,
+                           "text": text, "parse_mode": "Markdown"})
+        if not r.get("ok"):
+            desc = str(r.get("description") or "").lower()
+            if "parse" in desc or "entities" in desc:
+                r = await bot_api(self.app.http, self.app.manager_token,
+                                  "editMessageText",
+                                  {"chat_id": self.chat_id,
+                                   "message_id": self.message_id,
+                                   "text": text})
+        return self
+
+    async def delete(self):
+        try:
+            await bot_api(self.app.http, self.app.manager_token, "deleteMessage",
+                          {"chat_id": self.chat_id, "message_id": self.message_id})
+        except Exception:
+            pass
+
+
 class BotEv:
     """Pseudo-event for manager-bot (Bot API) commands."""
     is_bot_ev = True
@@ -81,7 +113,12 @@ class BotEv:
         self.is_private = True
 
     async def reply(self, text, **kw):
-        await self.app.manager_send(self.chat_id, text)
+        r = await self.app.manager_send(self.chat_id, text)
+        if r and r.get("ok"):
+            mid = (r.get("result") or {}).get("message_id")
+            if mid:
+                return BotReply(self.app, self.chat_id, mid)
+        return None
 
 
 async def bot_api(http, token, method, data=None, timeout=30):
@@ -467,7 +504,15 @@ class BotApp:
         self.client.add_event_handler(self.on_new_message, events.NewMessage())
         self.client.add_event_handler(self.on_message_edited,
                                       events.MessageEdited())
-        # start plugin background loops
+        # cancel stale module tasks from a previous client incarnation.
+        # run() is re-entered after disconnects; without this the clock loop
+        # etc. would run TWICE → double profile writes → flood/ban risk.
+        for name, t in list(self._tasks.items()):
+            if t and not t.done():
+                t.cancel()
+        self._tasks.clear()
+        # start plugin background loops (also re-registers raw-update hooks
+        # e.g. watcher on the fresh client)
         for name, info in MODULES.items():
             if info.start:
                 try:
