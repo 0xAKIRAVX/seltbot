@@ -73,7 +73,9 @@ def check_single_instance(env):
                 continue
             if str(run.get("id")) == run_id:
                 continue
-            if run.get("status") in ("in_progress", "queued"):
+            # NOTE: "pending" is a real status GitHub reports for freshly
+            # queued runs — missing it here caused double-writer near-misses
+            if run.get("status") in ("in_progress", "queued", "pending"):
                 log.warning("another run #%s is %s — exiting (single-writer guard)",
                             run.get("id"), run.get("status"))
                 sys.exit(0)
@@ -117,6 +119,7 @@ MENU = [
     ("tr", "ترجمه"),
     ("ai", "گفتگو با AI (نیازمند تنظیم)"),
     ("sum", "خلاصه‌سازی متن"),
+    ("watch", "اعلان دیدن و فعالیت"),
     ("health", "سلامت سیستم"),
     ("restart", "ری‌استارت شیفت"),
     ("ping", "سرعت پاسخ"),
@@ -330,7 +333,7 @@ def selftest():
     uniq = {id(c) for c in COMMANDS.values()}
     print(f"[1] plugins loaded: {len(MODULES)} modules, {len(uniq)} commands, "
           f"{len(COMMANDS)} keys (incl aliases)")
-    assert len(MODULES) >= 21, "missing modules"
+    assert len(MODULES) >= 22, "missing modules"
     assert len(uniq) >= 100, "missing commands"
 
     assert jalali.g2j(2023, 3, 21) == (1402, 1, 1), jalali.g2j(2023, 3, 21)
@@ -513,6 +516,20 @@ def selftest():
     assert not f and ts == nxt + 120, (ts, f)
     print("[12] clock boundary sync + phase realign OK (flips just after minute "
           "change, mid-minute phases self-heal)")
+
+    # [13] watcher module: honest stalker-lite (no fake profile views)
+    from bot.plugins import watcher as wmod
+    assert "watcher" in MODULES, "watcher module not registered"
+    assert "watch" in COMMANDS and COMMANDS["watch"].bot_ok
+    from telethon.tl.types import PeerUser, PeerChat
+    assert wmod._peer_uid(PeerUser(42)) == 42
+    assert wmod._peer_uid(PeerChat(42)) is None
+    t0 = 1000.0
+    assert not wmod._throttled("typing", 7, t0)          # first → fires
+    assert wmod._throttled("typing", 7, t0 + 10)          # inside window → suppressed
+    assert not wmod._throttled("typing", 7, t0 + 301)     # after window → fires
+    assert not wmod._throttled("read", 7, t0)             # independent kind
+    print("[13] watcher OK (peer filter + throttle; typing/read/online events)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
