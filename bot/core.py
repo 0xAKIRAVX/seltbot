@@ -528,6 +528,20 @@ class BotApp:
             self.db.set_setting("clock_first_base", self.me.first_name or "")
         if self.db.setting("clock_bio_base") is None:
             self.db.set_setting("clock_bio_base", (getattr(self.me, "about", None) or ""))
+        # v2.7 one-shot: the owner asked for the matrix clock («فونت ماتریسی
+        # متحرک») with this very deploy — enable it on the first v2.7 boot.
+        # Guarded by a flag: if the owner later turns it OFF it stays off
+        # (this block never runs again on that state).
+        if self.db.setting("clock_v27_matrix_default") is None:
+            self.db.set_setting("clock_v27_matrix_default", True)
+            if self.db.setting("clock_matrix_on") is None:
+                from .plugins.clock import MATRIX_TEMPLATE
+                prev = self.db.setting("clock_template")
+                if prev:
+                    self.db.set_setting("clock_matrix_prev", prev)
+                self.db.set_setting("clock_matrix_on", True)
+                self.db.set_setting("clock_template", MATRIX_TEMPLATE)
+                log.info("v2.7 default applied: matrix clock ON")
         # register dispatch handlers on THIS client object. run() creates a
         # fresh TelegramClient on every call (reconnect path), so a persistent
         # _handlers_added flag would leave the NEW client with ZERO handlers →
