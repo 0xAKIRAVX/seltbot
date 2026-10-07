@@ -2,12 +2,22 @@
 
 state.db → gzip → openssl AES-256-CBC (PBKDF2, STATE_KEY) → base64 →
 Contents API PUT `state.db.enc`. Restored on boot before the DB is opened.
+
+v2.2.4 fix: the old persist() ran the WHOLE thing in a thread executor,
+including PRAGMA wal_checkpoint on a connection shared with the asyncio
+loop → intermittent `sqlite3.OperationalError: database table is locked`
+→ state was NEVER uploaded (fresh start every shift). Now snapshot()
+(checkpoint+pack, fast) runs in the event-loop thread — same thread as all
+other DB access, so sqlite locking is serialized — and only the network
+PUT runs in the executor.
 """
 import base64
 import gzip
 import logging
 import os
+import sqlite3
 import subprocess
+import time
 
 import requests
 
@@ -54,15 +64,39 @@ def _api(repo, token, method, path, **kw):
         timeout=60, **kw)
 
 
-def persist(dbh, repo, token, key, note="tick"):
-    """Upload the (checkpointed) DB to the repo as encrypted state."""
-    if not (repo and token and key):
-        log.info("persist skipped (no repo/token/key config)")
+def snapshot(dbh, key: str) -> str:
+    """Checkpoint + pack the DB into an encrypted b64 blob.
+
+    MUST run in the event-loop thread (same as all other sqlite access) —
+    running it from an executor thread causes SQLITE_LOCKED on the shared
+    connection. Takes ~tens of ms on this DB size; fine to block the loop.
+    """
+    last_err = None
+    for _ in range(3):
+        try:
+            dbh.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            last_err = None
+            break
+        except sqlite3.OperationalError as e:
+            last_err = e
+            time.sleep(0.6)
+    if last_err is not None:
+        # best-effort passive checkpoint (never blocks); even without it the
+        # main db file usually holds all committed data after commit()
+        try:
+            dbh.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except sqlite3.OperationalError:
+            pass
+    dbh.commit()
+    return pack(dbh.path, key)
+
+
+def push_content(content: str, repo, token, note="tick"):
+    """Upload a pre-packed state blob — network only, executor-safe."""
+    if not (repo and token):
+        log.info("push skipped (no repo/token config)")
         return False
     try:
-        dbh.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        dbh.commit()
-        content = pack(dbh.path, key)
         sha = None
         r = _api(repo, token, "GET", f"contents/{PATH}")
         if r.status_code == 200:
@@ -81,6 +115,18 @@ def persist(dbh, repo, token, key, note="tick"):
                 continue
             log.warning("state push failed: %s %s", r.status_code, r.text[:200])
             return False
+    except Exception:
+        log.exception("push failed")
+    return False
+
+
+def persist(dbh, repo, token, key, note="tick"):
+    """Compat wrapper: snapshot + push (synchronous, whole thing)."""
+    if not (repo and token and key):
+        log.info("persist skipped (no repo/token/key config)")
+        return False
+    try:
+        return push_content(snapshot(dbh, key), repo, token, note)
     except Exception:
         log.exception("persist failed")
     return False
