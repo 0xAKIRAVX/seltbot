@@ -105,14 +105,34 @@ async def weather_cmd(app, ev, arg):
         await ev.reply(f"⛔ {type(e).__name__}")
 
 
-@command("tr", "search", "<متن>", "ترجمه", "Translate", bot_ok=True)
+@command("tr", "search", "[fa|en] <متن>", "ترجمه", "Translate", bot_ok=True)
 async def tr_cmd(app, ev, arg):
     text = arg.strip()
+    pair = None
+    # جهت دلخواه: .tr en|fa hello   یا   .tr fa hello
+    m = re.match(r"^(fa|en)\s*[|>]\s*(fa|en)\s+(.+)$", text, re.IGNORECASE)
+    if m:
+        a, b, text = m.group(1).lower(), m.group(2).lower(), m.group(3).strip()
+        if a != b:
+            pair = f"{a}|{b}"
     if not text:
-        await ev.reply("❌ `.tr متن` (جهت خودکار: انگلیسی→فارسی / فارسی→انگلیسی)")
+        await ev.reply("❌ `.tr متن` (خودکار) یا `.tr en|fa متن` (جهت دلخواه)")
         return
-    ascii_ratio = sum(1 for ch in text if ord(ch) < 128) / max(1, len(text))
-    pair = "en|fa" if ascii_ratio > 0.5 else "fa|en"
+    if pair is None:
+        ascii_ratio = sum(1 for ch in text if ord(ch) < 128) / max(1, len(text))
+        pair = "en|fa" if ascii_ratio > 0.5 else "fa|en"
+    # اگه AI فعال باشه از AI استفاده کن (کیفیت بالاتر)
+    try:
+        from .ai import _configured, _chat
+        if _configured(app):
+            src, dst = pair.split("|")
+            out = await _chat(app, [
+                {"role": "system", "content": f"Translate the user's text from {src} to {dst}. Output ONLY the translation."},
+                {"role": "user", "content": text[:6000]}], max_tokens=1000)
+            await ev.reply(f"🌍 (AI) `{pair}`\n\n{out[:3500]}")
+            return
+    except Exception:
+        pass
     try:
         async with app.http.get(
                 "https://api.mymemory.translated.net/get",
