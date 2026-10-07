@@ -65,7 +65,10 @@ class ProfileGovernor:
 
     # ---------- main entry ----------
     async def apply(self, target, text, force=False):
-        """target: first_name | last_name | bio. text: new value (None = keep).
+        """target: first_name | last_name | bio. text: new value (None = keep),
+        or a CALLABLE — re-evaluated right before the actual profile write so
+        the value written is fresh at write-time (v2.4: the clock passes a
+        lambda; the minute rendered is the minute at write, not at wake).
         Returns (applied: bool, retry_after: sec, why: str)."""
         app = self.app
         if target == "bio":
@@ -74,6 +77,9 @@ class ProfileGovernor:
             return (False, 0, "bad-target")
         if text is None:
             return (False, 0, "keep")
+        render_fn = text if callable(text) else None
+        if render_fn is not None:
+            text = render_fn()
         now = time.time()
         if not force and self.last_text.get(target) == text \
                 and now - self.last_ok.get(target, 0) < 600:
@@ -93,6 +99,8 @@ class ProfileGovernor:
                     except Exception:
                         pass
                 return (False, 3600, "budget")
+        if render_fn is not None:
+            text = render_fn()          # FRESH value — the write below is ms away
         self.last_try[target] = now
         try:
             res = await app.client(functions.account.UpdateProfileRequest(**{target: text}))
