@@ -78,7 +78,7 @@ ACTIONS = {
     "ck_bio_off": ("clock", "bio off"),
     "ck_restore": ("restore", ""),
     # — AFK —
-    "afk_on":     ("afk", "فعلاً در دسترس نیستم"),
+    "afk_on":     ("afk", ""),
     "afk_off":    ("unafk", ""),
     # — پاسخ خودکار —
     "ar_on":      ("autoreply", "on"),
@@ -127,6 +127,22 @@ ACTIONS = {
 
 PAGES = ("main", "clock", "afk", "autoreply", "rules", "antispam", "notes",
          "sched", "ai", "watch", "stats", "settings", "health", "help")
+
+# v2.5.2 — instant visual feedback: tapping a button pops a toast on the
+# button itself (answerCallbackQuery), so the owner SEES that the click did
+# something even before the command's own reply arrives.
+ACTION_TOASTS = {
+    "ck_on": "✅ ساعت روشن شد", "ck_off": "⏹ ساعت خاموش شد",
+    "ck_fmt1": "✅ قالب ساده اعمال شد", "ck_fmt2": "✅ شمسی + ساعت اعمال شد",
+    "ck_fmt3": "✅ قالب ۱۲ساعته اعمال شد", "ck_fmt4": "✅ قالب با اسم اعمال شد",
+    "ck_dg_bold": "✅ فونت بولد اعمال شد", "ck_dg_fa": "✅ فونت فارسی اعمال شد",
+    "ck_dg_mono": "✅ فونت مونو اعمال شد", "ck_dg_double": "✅ فونت توخالی اعمال شد",
+    "ck_dg_serif": "✅ فونت کلاسیک اعمال شد", "ck_dg_full": "✅ فونت عریض اعمال شد",
+    "ck_dg_asc": "✅ فونت ساده اعمال شد",
+    "ck_bio_on": "✅ ساعت در بیو روشن شد", "ck_bio_off": "⏹ ساعت بیو خاموش شد",
+    "ck_restore": "↩️ اسم اصلی برگشت",
+    "afk_on": "✅ AFK روشن شد", "afk_off": "✅ AFK خاموش شد",
+}
 
 
 # ---------------------------------------------------------------- helpers
@@ -216,11 +232,23 @@ def page_clock(app):
     tpl = app.s("clock_template", default_tpl) or default_tpl
     off = _clock_offset(app)
     on = app.s("clock_on", True)
+    # v2.5.2 — show the FULL profile (first name + clock), because that is
+    # what the owner actually sees next to their messages. Showing only the
+    # clock fragment made font/format changes look like "nothing happened".
+    try:
+        first = str(app.s("clock_first_base", "") or "").strip()
+    except Exception:
+        first = ""
+    sample = _clock_sample(app)
+    if app.s("clock_target", "last_name") == "first_name" or not first:
+        full = sample
+    else:
+        full = first + " " + sample
     lines = [
         "🕐 <b>ساعت زنده</b>",
         HR,
-        f"{'✅' if on else '⛔'} فعال — نمایش زنده:",
-        f"<code>{esc(_clock_sample(app))}</code>",
+        f"{'✅' if on else '⛔'} فعال — نمایش کنار اسمت:",
+        f"<code>{esc(full)}</code>",
         f"🔠 فونت ارقام: <b>{esc(dg_label)}</b>",
         f"🧩 قالب: <code>{esc(tpl)}</code>",
         (f"📞 کالیبره با گوشی: <b>{off:+d} ثانیه</b>" if off
@@ -228,6 +256,8 @@ def page_clock(app):
         f"{'✅' if app.s('clock_bio_on') else '⛔'} ساعت در بیو",
         "",
         "<i>یک کلیک = اعمال فوری:</i>",
+        "<i>ℹ️ تلگرام گاهی چند دقیقه‌ای طول می‌کشه اسم جدید رو تو لیست چت‌ها"
+        " نشون بده (کشِ خودشه) — ولی از لحظهٔ کلیک، روی پروفایلت فعاله.</i>",
     ]
     kb = [
         [B("⏹ خاموش‌کردن ساعت" if on else "▶️ روشن‌کردن ساعت",
@@ -259,8 +289,12 @@ def page_afk(app):
         reason = (st.get("reason") or "").strip()
         since = float(st.get("since") or 0)
         dur_s = max(0.0, _time.time() - since) if (active and since) else 305.0
+        # v2.5.2: the old preview used a hardcoded «زهرا» — the owner thought
+        # the bot literally replies «زهرا جان» to EVERYONE. The real message
+        # carries each sender's own name; the placeholder + note makes that
+        # unmistakable.
         preview = _build_afk_text(
-            app, "زهرا", dur_s, since or (_time.time() - 305),
+            app, "نامِ مخاطب", dur_s, since or (_time.time() - 305),
             reason or "فعلاً در دسترس نیستم")
     except Exception:
         active = False
@@ -279,6 +313,8 @@ def page_afk(app):
         "",
         "پیش‌نمایش پیامی که برای مخاطب ارسال می‌شود:",
         f"<blockquote>{esc(preview)}</blockquote>",
+        "<i>«نامِ مخاطب» یعنی اسمِ همون کسی که بهت پیام داده — خودکار"
+        " جایگزین می‌شود و اسمش کلیک‌شدنیه.</i>",
         "",
         "<i>با اولین پیام خودت، AFK خودکار خاموش می‌شود.</i>",
         "<i>دلیل دلخواه: /afk دلیل — قالب اختصاصی: /afktext</i>",
@@ -619,7 +655,7 @@ async def handle_callback(app, cb):
         await answer("؟")
         return
     cmd, arg = act
-    await answer()
+    await answer(ACTION_TOASTS.get(data))
     ev = BotEv(app, chat_id, frm)
     try:
         await app.run_command(cmd, arg, ev)
