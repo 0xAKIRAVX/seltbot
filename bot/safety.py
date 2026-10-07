@@ -42,6 +42,15 @@ class ProfileGovernor:
     def min_gap(self):
         return 15 if self.app.s("clock_accept_risk", False) else 30
 
+    def healthy(self):
+        """True when not in a degraded state (no backoff, no recent strikes).
+        Used by the clock to decide whether a mid-minute write may force the
+        next boundary flip (keeps the clock minute-exact) or must respect
+        the strike-multiplied interval (Telegram is resetting us — slow down)."""
+        now = time.time()
+        recent = [t for t in self.strikes if now - t < 3600]
+        return self.backoff <= 1.01 and len(recent) < 3
+
     def effective_interval(self, target):
         mult = self.backoff
         now = time.time()
