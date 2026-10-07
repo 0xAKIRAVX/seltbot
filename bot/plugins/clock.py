@@ -84,14 +84,22 @@ def _limit(app, target):
     return 63
 
 
+def _wrap_pfx(app, s, target):
+    pfx = str(app.s("clock_prefix", "") or "")
+    sfx = str(app.s("clock_suffix", "") or "")
+    if not (pfx or sfx):
+        return s
+    return (pfx + s + sfx)[:_limit(app, target)]
+
+
 def _render_name(app):
     tpl = app.s("clock_template", DEFAULT_TEMPLATE) or DEFAULT_TEMPLATE
-    return render(app, tpl, app.now())[:_limit(app, _target_field(app))]
+    return _wrap_pfx(app, render(app, tpl, app.now()), _target_field(app))[:_limit(app, _target_field(app))]
 
 
 def _render_bio(app):
     tpl = app.s("clock_bio_template", DEFAULT_BIO_TEMPLATE) or DEFAULT_BIO_TEMPLATE
-    return render(app, tpl, app.now())[:_limit(app, "about")]
+    return _wrap_pfx(app, render(app, tpl, app.now()), "about")[:_limit(app, "about")]
 
 
 def _align_next(now, iv):
@@ -227,6 +235,14 @@ async def clock_cmd(app, ev, arg):
         else:
             app.sets("clock_digits", "ascii")
         await ev.reply(f"✅ سبک ارقام: {app.s('clock_digits')}")
+    elif sub == "prefix":
+        app.sets("clock_prefix", rest)
+        _next_name = 0
+        await ev.reply(f"✅ پیشوند: «{rest}»\nنمونه: {_render_name(app)}")
+    elif sub == "suffix":
+        app.sets("clock_suffix", rest)
+        _next_name = 0
+        await ev.reply(f"✅ پسوند: «{rest}»\nنمونه: {_render_name(app)}")
     elif sub == "bio":
         await _clock_bio(app, ev, rest)
     else:
@@ -267,7 +283,9 @@ async def _clock_status(app, ev):
         f"• وضعیت: " + ("✅ روشن" if app.s("clock_on", True) else "⛔ خاموش"),
         f"• هدف: {'اسم اول' if _target_field(app) == 'first_name' else 'اسم آخر'}"
         + (" + بیو" if app.s("clock_bio_on", False) else ""),
-        f"• قالب: `{app.s('clock_template', DEFAULT_TEMPLATE)}`",
+        f"• قالب: `{app.s('clock_template', DEFAULT_TEMPLATE)}`"
+        + (f"\n• پیشوند/پسوند: «{app.s('clock_prefix', '')}» … «{app.s('clock_suffix', '')}»"
+           if (app.s("clock_prefix", "") or app.s("clock_suffix", "")) else ""),
         f"• نمونه: {_render_name(app)}",
         f"• فاصله: {app.s('clock_interval', 60)}s (بیو: {app.s('clock_bio_interval', 60)}s)",
         f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {app.s('clock_digits', 'mono')}",
