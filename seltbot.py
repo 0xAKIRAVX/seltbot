@@ -213,16 +213,22 @@ async def _deadline_watcher(app, stop_ev):
 
 
 async def _periodic_upload(app):
-    """Upload encrypted state every 30 min (crash protection)."""
+    """Upload encrypted state every 4 min (crash protection).
+
+    v2.2.4: snapshot (checkpoint+pack) runs IN the loop thread — the old
+    executor-thread checkpoint hit `database table is locked` and state was
+    never uploaded. 4-min cadence bounds any abrupt-kill data loss to ≤4min.
+    """
     from bot import state_io
     while not app.stopping:
         try:
-            await asyncio.sleep(1800)
+            await asyncio.sleep(240)
             if app.stopping:
                 break
+            content = state_io.snapshot(app.db, app.env["state_key"])
             await asyncio.get_event_loop().run_in_executor(
-                None, state_io.persist, app.db, app.env["gh_repo"],
-                app.env["gh_token"], app.env["state_key"], "tick")
+                None, state_io.push_content, content, app.env["gh_repo"],
+                app.env["gh_token"], "tick")
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -298,9 +304,11 @@ async def amain(mode_once=False):
             await app.graceful("deadline")
     finally:
         try:
+            # snapshot in-loop (thread-safe sqlite path), only PUT in executor
+            content = state_io.snapshot(db, env["state_key"])
             await asyncio.get_event_loop().run_in_executor(
-                None, state_io.persist, db, env["gh_repo"], env["gh_token"],
-                env["state_key"], app.stop_reason or "end")
+                None, state_io.push_content, content, env["gh_repo"],
+                env["gh_token"], app.stop_reason or "end")
         except Exception:
             log.exception("final persist")
         db.close()
