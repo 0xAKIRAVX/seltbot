@@ -41,18 +41,47 @@ def _digit_fn(style):
 # no real frame-rate animation exists, and writing faster than once a minute
 # would violate the anti-ban pacing (hard requirement). What IS possible —
 # safely, at zero extra API writes: change the glyphs every minute, riding
-# the normal clock flip. Three moving parts: a rotating braille spinner,
-# glitch-mixed digit fonts, and a filling hour progress bar.
-MATRIX_TEMPLATE = "{spin}｜ {gtime} {hbar}"
-_SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"      # terminal spinner, one frame per minute
+# the normal clock flip.
+# v2.7.1 — «بارون کد»: owner feedback «این حرکت نمی‌کنه» — the v2.7 per-minute
+# delta (braille dots + font swaps) was too subtle to SEE at a glance. Now
+# FOUR moving parts, led by {rain}: a sliding half-width-katakana code column
+# (the Matrix «digital rain» — each minute the window slides one char: a fresh
+# glyph enters on the right, the oldest drops off the left, so the name
+# visibly FLOWS), a high-contrast quarter-circle spinner, glitch-mixed digit
+# fonts, and a filling hour progress bar.
+MATRIX_TEMPLATE_V27 = "{spin}｜ {gtime} {hbar}"      # pre-2.7.1 (migration match)
+MATRIX_TEMPLATE = "{spin}｜ {rain} {gtime} ｜ {hbar}"
+_SPIN_FRAMES = "◐◓◑◒"     # quarter-circle fill rotating, one frame per minute
+_RAIN_POOL = ("ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ"
+              "0123456789")  # the Matrix «digital rain» glyph pool
 _GLITCH_FONTS = (jalali.mono_digits, jalali.bold_digits,
                  jalali.double_digits, jalali.full_digits,
                  jalali.serif_digits)
 
 
+def _rain_char(k):
+    """Deterministic pseudo-random pool glyph for stream index k
+    (multiplicative hash + xorshift mix — same k → same char, always)."""
+    h = (k * 2654435761) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * 1274126177) & 0xFFFFFFFF
+    h ^= h >> 16
+    return _RAIN_POOL[h % len(_RAIN_POOL)]
+
+
+def _rain(dt, n=5):
+    """v2.7.1 — «بارون کد»: sliding window over an endless deterministic
+    glyph stream indexed by ABSOLUTE minute (toordinal-based, never resets).
+    One minute → the window slides one char: a new glyph enters on the right,
+    the oldest leaves on the left. Minute-stable within the minute →
+    idempotent writes, zero extra profile writes (anti-ban pacing intact)."""
+    m = dt.toordinal() * 1440 + dt.hour * 60 + dt.minute
+    return "".join(_rain_char(m - i) for i in range(n - 1, -1, -1))
+
+
 def _spin_frame(dt):
-    """Spinner frame for this minute (full rotation every 10 minutes)."""
-    return _SPIN_FRAMES[dt.minute % 10]
+    """Spinner frame for this minute (full rotation every 4 minutes)."""
+    return _SPIN_FRAMES[dt.minute % 4]
 
 
 def _glitch_time(dt):
@@ -188,10 +217,17 @@ _DATE_SH = (rf"[{_DIGIT_CLS}]{{1,4}}\s*[/.-]\s*[{_DIGIT_CLS}]{{1,2}}"
             rf"\s*[/.-]\s*[{_DIGIT_CLS}]{{1,2}}")
 _TIME_SH = (rf"[{_DIGIT_CLS}]{{1,2}}\s*[:.،]\s*[{_DIGIT_CLS}]{{2}}"
             rf"(?:\s*[:.،]\s*[{_DIGIT_CLS}]{{2}})?")
+# v2.7.1 — matrix names now carry a half-width-katakana rain column
+# (U+FF66–FF9F are \w LETTERS, not symbols!) — allow that range in the noise
+# zones around the time/date, or looks_like_clock() would miss
+# «◐｜ ﾊﾐﾋｰｼ 𝟶𝟯:𝟰𝟺 ｜ ▓░»-shaped names and the boot base-capture could
+# archive a live clock value as the user's "real" last_name
+# (_recent_renders still backstops whenever `app` is passed).
+_RAIN_CLS = _rng(0xFF66, 0xFF9F)
 CLOCK_NAME_RE = re.compile(
-    rf"^[\W_]{{0,8}}?\s*{_TIME_SH}[\s\W_]*$"
-    rf"|^[\W_]{{0,8}}?\s*{_DATE_SH}\s*[\W_]{{0,4}}?\s*{_TIME_SH}[\s\W_]*$"
-    rf"|^[\W_]{{0,8}}?\s*{_DATE_SH}[\s\W_]*$")
+    rf"^[\W_{_RAIN_CLS}]{{0,16}}?\s*{_TIME_SH}[\s\W_{_RAIN_CLS}]*$"
+    rf"|^[\W_{_RAIN_CLS}]{{0,16}}?\s*{_DATE_SH}\s*[\W_{_RAIN_CLS}]{{0,4}}?\s*{_TIME_SH}[\s\W_{_RAIN_CLS}]*$"
+    rf"|^[\W_{_RAIN_CLS}]{{0,16}}?\s*{_DATE_SH}[\s\W_{_RAIN_CLS}]*$")
 
 TOKENS_HELP_FA = """🧩 توکن‌های قالب (ارقام همه با فونت انتخابی می‌شینن):
 `{hhm}:{mmm}` → ساعت:دقیقه
@@ -202,7 +238,8 @@ TOKENS_HELP_FA = """🧩 توکن‌های قالب (ارقام همه با فو
 `{name}` → اسم/بیوی اصلیت
 
 🌀 توکن‌های متحرک (هر دقیقه عوض می‌شن — ماتریکس):
-`{spin}` → ⠋ اسپینر چرخان (می‌چرخه ⠋→⠙→⠹)
+`{rain}` → ﾊﾐﾋｰｼ بارون کد — هر دقیقه می‌لغزه و کاراکتر جدید می‌باره
+`{spin}` → ◐ اسپینر چرخان (◐→◓→◑→◒)
 `{gtime}` → 𝟶𝟑:𝟺𝟒 ساعت گلیچی — فونت هر رقم هر دقیقه می‌رقصه
 `{hbar}` → ▓▓▓▓░░░░ نوار پیشرفت ساعت | `{dbar}` → نوار پیشرفت روز
 `{phase}` → ☀️/🌙 بر اساس شب‌وروز
@@ -290,6 +327,7 @@ def render(app, template, dt):
         # visible "motion"), and they ride the existing once-per-minute
         # flip — zero extra profile writes, anti-ban pacing untouched.
         "spin": _spin_frame(dt),
+        "rain": _rain(dt),
         "gtime": _glitch_time(dt),
         "hbar": _hour_bar(dt),
         "dbar": _day_bar(dt),
@@ -687,11 +725,12 @@ async def _clock_nodate(app, ev):
 
 
 async def _clock_matrix(app, ev, rest):
-    """v2.7 — one tap «ساعت ماتریسی متحرک»: preset template with a rotating
-    braille spinner, glitch-mixed digit fonts and an hour progress bar. All
-    three change EVERY minute, riding the normal clock flip (zero extra API
-    writes — anti-ban pacing untouched). `matrix off` restores the previous
-    look, date-stripped (the owner's standing «no date» choice is kept)."""
+    """v2.7 — one tap «ساعت ماتریسی متحرک»: preset template with a sliding
+    katakana code-rain column, a rotating quarter-circle spinner, glitch-mixed
+    digit fonts and an hour progress bar. All four change EVERY minute, riding
+    the normal clock flip (zero extra API writes — anti-ban pacing untouched).
+    `matrix off` restores the previous look, date-stripped (the owner's
+    standing «no date» choice is kept)."""
     arg = (rest or "").strip().lower()
     on = bool(app.s("clock_matrix_on", False))
     if arg in ("off", "خاموش", "بستن"):
@@ -712,9 +751,12 @@ async def _clock_matrix(app, ev, rest):
         app.sets("clock_template", _strip_date(prev) or DEFAULT_TEMPLATE)
     note = await _apply_feedback(app)
     if want:
-        msg = ("🌀 حالت ماتریکس روشن شد!\n"
-               "هر دقیقه سه چیز عوض می‌شه: اسپینر می‌چرخه ⠋→⠙→⠹، فونت ارقام"
-               " می‌رقصه (گلیچ دیجیتال) و نوار پیشرفت ساعت پُر می‌شه ▓.\n"
+        msg = ("🌀 ماتریکس v2.7.1 روشن شد — بارون کد اومد!\n"
+               "هر دقیقه چهار چیز عوض می‌شه:\n"
+               "• ﾊﾐﾋｰｼ بارون کد می‌لغزه — کاراکتر جدید از راست می‌باره\n"
+               "• اسپینر می‌چرخه ◐→◓→◑→◒\n"
+               "• فونت ارقام می‌رقصه (گلیچ دیجیتال)\n"
+               "• نوار پیشرفت ساعت پُر می‌شه ▓\n"
                "ⓘ اسم پروفایل تلگرام متن ثابته و انیمیشن واقعی نداره — این"
                " امن‌ترین شکل «متحرک» ممکنه: هر دقیقه، روی همون تیکِ همیشگی"
                " ساعت، بدون حتی یک نوشتنِ اضافه (ریسک بن صفر).")
@@ -800,7 +842,7 @@ async def _clock_status(app, ev):
         f"• نمونه: {_render_name(app)}",
         f"• فاصله: {app.s('clock_interval', 60)}s (بیو: {app.s('clock_bio_interval', 60)}s)",
         f"• منطقهٔ زمانی: {app.s('tz', 'Asia/Tehran')} | ارقام: {DIGIT_STYLES.get(app.s('clock_digits', DEFAULT_DIGITS) or DEFAULT_DIGITS, ('?',))[0]}",
-        "• 🌀 ماتریکس: " + ("✅ فعال (متحرک هر دقیقه)" if app.s("clock_matrix_on", False)
+        "• 🌀 ماتریکس: " + ("✅ فعال (بارون کد + اسپینر، هر دقیقه می‌لغزه)" if app.s("clock_matrix_on", False)
                              else "⛔ خاموش (`.clock matrix`)"),
         (f"• 📆 شمارش روز: روز {_days_since(app, app.now())} از {app.s('clock_since', '')}"
          if app.s("clock_since", "") else "• 📆 شمارش روز: ⛔ (`.clock since 1405/7/15`)"),
