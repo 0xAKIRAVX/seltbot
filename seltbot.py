@@ -707,10 +707,12 @@ def selftest():
     print("[18] v2.6 OK («حذف تاریخ»: token/emoji stripping, divider tidy, "
           "idempotent, font preserved end-to-end)")
 
-    # [19] v2.7: «ساعت ماتریسی متحرک» — spinner/glyph tokens all render,
-    # minute-stable but minute-ADVANCING (that IS the animation), the matrix
-    # name is still clock-recognized (boot base-capture safe), {days} counts
-    # correctly, and the since-date parser accepts jalali/gregorian/fa-digits.
+    # [19] v2.7/2.7.1: «ساعت ماتریسی متحرک» — spinner/glyph/rain tokens all
+    # render, minute-stable but minute-ADVANCING (that IS the animation); the
+    # v2.7.1 rain column SLIDES one char per minute (new glyph right, oldest
+    # drops left); the matrix name is still clock-recognized by the STATIC
+    # regex alone (boot base-capture safe — katakana rain included); {days}
+    # counts correctly; the since-date parser accepts jalali/gregorian/fa-digits.
     class MatrixShim(SerifShim):
         def s(self, k, d=None):
             return {"clock_digits": "serif",
@@ -720,7 +722,12 @@ def selftest():
     t0 = datetime.datetime(2026, 10, 7, 3, 44, tzinfo=ZoneInfo("Asia/Tehran"))
     t1 = t0 + datetime.timedelta(minutes=1)
     sp0, sp1 = clockmod.render(mshim, "{spin}", t0), clockmod.render(mshim, "{spin}", t1)
-    assert sp0 == "⠼" and sp1 == "⠴" and sp0 != sp1, (sp0, sp1)   # 44%10→4, 45%10→5
+    assert sp0 == "◐" and sp1 == "◓" and sp0 != sp1, (sp0, sp1)   # 44%4→0, 45%4→1
+    r0, r1 = clockmod.render(mshim, "{rain}", t0), clockmod.render(mshim, "{rain}", t1)
+    assert len(r0) == 5 and r0 != r1, (r0, r1)
+    assert r1[:4] == r0[1:], (r0, r1)              # window SLIDES one char/min
+    assert r0 == clockmod.render(mshim, "{rain}", t0)           # minute-stable
+    assert all(c in clockmod._RAIN_POOL for c in r0 + r1), (r0, r1)
     g0, g1 = clockmod.render(mshim, "{gtime}", t0), clockmod.render(mshim, "{gtime}", t1)
     assert g0 == clockmod.render(mshim, "{gtime}", t0) and g0 != g1, (g0, g1)
     assert len(g0) == 5, g0
@@ -734,16 +741,22 @@ def selftest():
     dv = clockmod.render(mshim, "روز {days}", t0)      # 2026-09-07 → 10-07 = 30
     assert dv == "روز " + serif("30"), dv
     mfull = clockmod.render(mshim, clockmod.MATRIX_TEMPLATE, t0)
-    assert clockmod.looks_like_clock(mfull), mfull      # boot-capture safety
+    assert "{rain}" in clockmod.MATRIX_TEMPLATE and "ﬁ" not in mfull
+    assert len(mfull) <= 64, mfull                     # last_name hard limit
+    assert clockmod.looks_like_clock(mfull), mfull      # static-regex, no app
+    assert clockmod.looks_like_clock(
+        clockmod.render(mshim, clockmod.MATRIX_TEMPLATE, t1)), "matrix t1 unseen"
+    assert clockmod.looks_like_clock("◐｜ ﾊﾐﾋｰｼ 𝟶３:𝟐𝟝 ｜ ▓▓▓▓▓░░░░░░░")
     ps = clockmod._parse_since
     assert ps("1405/07/15") == "2026-10-07" and ps("2026-10-07") == "2026-10-07"
     assert ps("1405/7/15") == "2026-10-07" and ps("۱۴۰۵/۷/۱۵") == "2026-10-07"
     assert ps("2026.10.7") == "2026-10-07"
     assert ps("garbage") is None and ps("") is None and ps("1405/13/40") is None
     assert clockmod._strip_date(clockmod.MATRIX_TEMPLATE) == clockmod.MATRIX_TEMPLATE
-    print("[19] v2.7 OK (matrix: spinner advances, glitch re-fonts each minute, "
-          "hbar fills, phase/days tokens, since parser jalali+greg+fa, "
-          "matrix name still clock-detected)")
+    print("[19] v2.7/v2.7.1 OK (matrix: rain column SLIDES each minute + pool/"
+          "determinism, quarter spinner advances, glitch re-fonts, hbar fills, "
+          "phase/days tokens, since parser jalali+greg+fa, matrix name with "
+          "katakana rain still clock-detected by static regex)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
