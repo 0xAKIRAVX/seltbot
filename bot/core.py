@@ -542,6 +542,20 @@ class BotApp:
                 self.db.set_setting("clock_matrix_on", True)
                 self.db.set_setting("clock_template", MATRIX_TEMPLATE)
                 log.info("v2.7 default applied: matrix clock ON")
+        # v2.7.1 one-shot: the owner said «این حرکت نمی‌کنه» — the v2.7
+        # per-minute delta (braille dots, font swaps) was too subtle to see.
+        # Upgrade the stored v2.7 matrix template to the «بارون کد» version
+        # (sliding katakana rain + high-contrast spinner). Only fires on an
+        # EXACT v2.7 template match — a hand-customized template is respected
+        # (its owner can still get the rain via `.clock matrix`).
+        if self.db.setting("clock_v271_rain") is None:
+            self.db.set_setting("clock_v271_rain", True)
+            if self.db.setting("clock_matrix_on"):
+                from .plugins.clock import MATRIX_TEMPLATE, MATRIX_TEMPLATE_V27
+                cur = self.db.setting("clock_template") or ""
+                if cur == MATRIX_TEMPLATE_V27:
+                    self.db.set_setting("clock_template", MATRIX_TEMPLATE)
+                    log.info("v2.7.1 upgrade: matrix template -> rain version")
         # register dispatch handlers on THIS client object. run() creates a
         # fresh TelegramClient on every call (reconnect path), so a persistent
         # _handlers_added flag would leave the NEW client with ZERO handlers →
