@@ -16,6 +16,8 @@ from telethon.tl import functions, types
 from . import jalali
 from .db import DB
 from .i18n import get as i18n_get
+from .nums import as_float as _nums_as_float
+from .nums import as_int as _nums_as_int
 from .safety import Limiter, ProfileGovernor
 
 log = logging.getLogger("seltbot")
@@ -62,6 +64,21 @@ class Cmd:
         self.name, self.fn, self.module, self.usage = name, fn, module, usage
         self.d_fa, self.d_en, self.aliases = d_fa, d_en, aliases
         self.bot_ok, self.hidden = bot_ok, hidden
+
+
+def as_int(val, default, lo=None, hi=None):
+    """v2.8.0 — crash-proof int() for settings that may hold legacy junk.
+    A value like 'abc' (stored before validation existed) must NEVER kill a
+    background loop — return the sane default instead.
+    (Implementation lives in bot/nums.py — a leaf module — to avoid the
+    core↔safety circular import; re-exported here so plugins can keep
+    importing it from ..core.)"""
+    return _nums_as_int(val, default, lo, hi)
+
+
+def as_float(val, default, lo=None, hi=None):
+    """Same crash-proof read for float settings (autoreply_delay…)."""
+    return _nums_as_float(val, default, lo, hi)
 
 
 class ModuleInfo:
@@ -182,7 +199,7 @@ class BotApp:
         self._grace_done = False
         self.gov = ProfileGovernor(self)
         self.limiter = Limiter()
-        self._sent_ids = set()
+        self._sent_ids = {}
         self._stat_pending = {}
         self._tasks = {}
         self._tzcache = ("", None)
@@ -280,9 +297,15 @@ class BotApp:
     # ---------- bot-sent tracking (so AFK auto-clear ignores our own replies) ----------
     def mark_bot_sent(self, msg_id):
         if msg_id:
-            self._sent_ids.add(msg_id)
+            # v2.8.0: dict (insertion-ordered) instead of set — the old
+            # `set(list(...))[-1500:]` "kept the newest 1500" only by luck,
+            # because sets are UNORDERED: after a resize the tail of the list
+            # is an arbitrary sample, so a just-sent id could be dropped and
+            # a long-dead id kept. With a dict we trim the OLDEST deterministically.
+            self._sent_ids[msg_id] = None
             if len(self._sent_ids) > 3000:
-                self._sent_ids = set(list(self._sent_ids)[-1500:])
+                for old in list(self._sent_ids)[:1500]:
+                    del self._sent_ids[old]
 
     def is_bot_sent(self, msg_id):
         return msg_id in self._sent_ids
