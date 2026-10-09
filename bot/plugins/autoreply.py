@@ -6,7 +6,7 @@ import logging
 import random
 import time
 
-from ..core import command, incoming_hook
+from ..core import as_float, as_int, command, incoming_hook
 
 log = logging.getLogger("seltbot.autoreply")
 
@@ -64,7 +64,7 @@ async def autoreply_incoming(app, event):
                 break
     if matched is None and not offhours_text:
         return False
-    cd = int(app.s("autoreply_cooldown", 900))
+    cd = as_int(app.s("autoreply_cooldown", 900), 900, 10, 86400)
     if time.time() - app.db.seen(sid, "ar") < cd:
         return False
     app.db.touch_seen(sid, "ar")
@@ -77,7 +77,7 @@ async def autoreply_incoming(app, event):
         body = offhours_text
     if not body:
         return False
-    delay = float(app.s("autoreply_delay", 3) or 3)
+    delay = as_float(app.s("autoreply_delay", 3), 3, 0, 300) or 3
     await asyncio.sleep(max(0.5, random.uniform(delay * 0.6, delay * 1.4)))
     sent = False
     try:
