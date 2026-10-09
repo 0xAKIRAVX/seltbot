@@ -2,7 +2,7 @@
 import logging
 import time
 
-from ..core import command, incoming_hook
+from ..core import as_int, command, incoming_hook
 
 log = logging.getLogger("seltbot.filters")
 
@@ -22,7 +22,8 @@ async def filters_incoming(app, event):
     text = (event.message.raw_text or "").lower()
     for r in rows:
         if r["pattern"] and r["pattern"] in text:
-            if not app.limiter.allow(("filter", event.chat_id), int(app.s("filters_cooldown", 300))):
+            if not app.limiter.allow(("filter", event.chat_id),
+                                     as_int(app.s("filters_cooldown", 300), 300, 5, 86400)):
                 return False
             try:
                 m = await event.reply(r["reply"])
