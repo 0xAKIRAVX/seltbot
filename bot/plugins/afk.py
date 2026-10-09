@@ -11,7 +11,7 @@ import re
 import time
 
 from .. import jalali
-from ..core import command, incoming_hook, outgoing_hook
+from ..core import as_int, command, incoming_hook, outgoing_hook
 
 log = logging.getLogger("seltbot.afk")
 
@@ -154,8 +154,8 @@ async def afktext_cmd(app, ev, arg):
     a = arg.strip()
     if not a:
         cur = str(app.s("afk_text", "") or "")
-        head = ("قالب فعلی (پیش‌فرضِ مرتب):") if not cur else ("قالب فعلی:\n`" + cur + "`")
-        await ev.reply(head + "\n\n" + AFK_TOKENS_HELP if not cur else head + "\n\n" + AFK_TOKENS_HELP)
+        head = ("قالب فعلی:\n`" + cur + "`") if cur else "قالب فعلی (پیش‌فرضِ مرتب):"
+        await ev.reply(head + "\n\n" + AFK_TOKENS_HELP)
         return
     if a.lower() in ("reset", "ریست", "پیش‌فرض", "default"):
         app.dels("afk_text")
@@ -223,7 +223,7 @@ async def afk_incoming(app, event):
                 pass
     if not mentioned:
         return False
-    cd = int(app.s("afk_cooldown", 1800))
+    cd = as_int(app.s("afk_cooldown", 1800), 1800, 10, 86400)
     if time.time() - app.db.seen(sid, "afk") < cd:
         return False
     app.db.touch_seen(sid, "afk")
