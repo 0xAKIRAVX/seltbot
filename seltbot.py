@@ -165,6 +165,19 @@ async def manager_bot_loop(app):
                                  "allowed_updates": ["message", "edited_message",
                                                      "callback_query"]},
                                 timeout=30)
+            # v2.8.0: an ok:false reply (dead token 401, webhook conflict 409)
+            # returns INSTANTLY with no result — without this guard the loop
+            # span at full speed, hammering api.telegram.org (IP-ban risk for
+            # the runner) while commands stayed dead. Back off 5s instead.
+            if not res.get("ok"):
+                desc = str(res.get("description") or "")[:140]
+                if "409" in str(res.get("error_code") or "") or "conflict" in desc.lower():
+                    log.error("manager getUpdates 409 (webhook took over) — "
+                              "polling halted, retrying every 5s")
+                else:
+                    log.warning("manager getUpdates failed: %s — retry in 5s", desc)
+                await asyncio.sleep(5)
+                continue
             for u in res.get("result", []):
                 offset = u["update_id"] + 1
                 cbq = u.get("callback_query")
@@ -885,6 +898,136 @@ def selftest():
           " fields the clock owns AND reads the bio from getFullUser — the User"
           " object never carries `about`, which used to cause fake bio-resets"
           " every 5 minutes and archived the real bio as empty)")
+
+    # [21] v2.8.0 — the second bug-hunt. Each block guards one confirmed bug:
+    #  A) safe_calc resource exhaustion (9**9**9 used to FREEZE the event
+    #     loop → clock dead, shift zombie);
+    #  B) .set accepted junk for numeric keys → int('abc') crashed the clock
+    #     loop on EVERY tick (validate_setting + as_int double layer);
+    #  C) scheduler catch-up double-firing after downtime;
+    #  D) notes media path traversal via crafted filename;
+    #  E) mark_bot_sent unordered-set pruning could drop the newest ids.
+    import signal as _signal
+
+    class _Alarm(Exception):
+        pass
+
+    def _alarm(sig, frm):
+        raise _Alarm()
+
+    _signal.signal(_signal.SIGALRM, _alarm)
+    _signal.alarm(3)
+    try:
+        t0 = time.time()
+        try:
+            safe_calc("9**9**9")
+            raise AssertionError("9**9**9 must be rejected")
+        except _Alarm:
+            raise AssertionError("safe_calc('9**9**9') still hangs!")
+        except ValueError:
+            pass
+        assert time.time() - t0 < 1.0, "rejection too slow"
+    finally:
+        _signal.alarm(0)
+    _signal.alarm(3)
+    try:
+        try:
+            safe_calc("factorial(99999)")
+            raise AssertionError("factorial(99999) must be rejected")
+        except _Alarm:
+            raise AssertionError("factorial(99999) still hangs!")
+        except ValueError:
+            pass
+    finally:
+        _signal.alarm(0)
+    assert safe_calc("2**10") == 1024
+    assert safe_calc("factorial(10)") == 3628800
+    assert safe_calc("sqrt(144)/2") == 6
+    print("[21a] safe_calc resource guards OK (9**9**9 / factorial(99999) fast-"
+          "fail; legit math untouched)")
+
+    from bot.plugins.settingsmod import validate_setting
+    ok, v, err = validate_setting(None, "clock_interval", "abc")
+    assert not ok and v is None and err, (ok, v, err)
+    ok, v, err = validate_setting(None, "clock_interval", "90")
+    assert ok and v == 90, (ok, v, err)
+    ok, v, err = validate_setting(None, "clock_interval", "۶۰")   # fa digits
+    assert ok and v == 60, (ok, v, err)
+    ok, v, err = validate_setting(None, "clock_interval", "5")
+    assert not ok, "out-of-range must be rejected"
+    ok, v, err = validate_setting(None, "tz", "Mars/Olympus")
+    assert not ok, "bad tz must be rejected"
+    ok, v, err = validate_setting(None, "tz", "Europe/London")
+    assert ok and v == "Europe/London"
+    ok, v, err = validate_setting(None, "delcmd", "junk")
+    assert not ok, "junk bool must be rejected"
+    ok, v, err = validate_setting(None, "delcmd", "روشن")
+    assert ok and v is True
+    ok, v, err = validate_setting(None, "autoreply_hours", "9 till 18")
+    assert not ok, "junk hours must be rejected"
+    ok, v, err = validate_setting(None, "autoreply_delay", "2.5")
+    assert ok and v == 2.5
+    ok, v, err = validate_setting(None, "clock_digits", "neon")
+    assert not ok, "unknown digit style must be rejected"
+    ok, v, err = validate_setting(None, "clock_template", "{jdate} ｜ {hhm}:{mmm}")
+    assert ok and v == "{jdate} ｜ {hhm}:{mmm}"   # free text stays free
+    print("[21b] .set validation OK (junk ints/bools/tz/hours rejected with "
+          "Persian errors; fa-digits + free-text templates accepted)")
+
+    from bot.core import as_int, as_float, BotApp
+    assert as_int("abc", 60) == 60
+    assert as_int("45", 60) == 45
+    assert as_int(None, 60) == 60
+    assert as_int("5", 60, lo=15) == 15            # clamped up
+    assert as_int("999999", 60, hi=7200) == 7200   # clamped down
+    assert as_float("junk", 3) == 3
+    assert as_float("2.5", 3) == 2.5
+    # end-to-end: the governor must survive a junk interval in the store
+    class JunkApp:
+        def s(self, k, d=None):
+            return {"clock_interval": "abc"}.get(k, d)
+
+        def now(self):
+            return datetime.datetime.now(ZoneInfo("Asia/Tehran"))
+    from bot.safety import ProfileGovernor as _PG
+    govj = _PG(JunkApp())
+    assert govj.base_interval("last_name") == 60, "junk interval must fall back"
+    print("[21c] as_int/as_float defensive layer OK (junk store values fall "
+          "back to sane defaults — governor/clock can never crash on them)")
+
+    from bot.plugins.scheduler import _next_occurrence as _nx
+    base, day = 1_000_000, 86400
+    assert _nx(base, day, base + 5) == base + day            # on-time → next slot
+    assert _nx(base, day, base + day - 1) == base + day      # 1s before slot → that slot
+    # 3 days of downtime → THIS fire is the late one; next lands tomorrow
+    now3 = base + 3 * day
+    assert _nx(base, day, now3) == base + 4 * day
+    assert _nx(base, day, now3) > now3                        # never re-fire now
+    assert _nx(base, day, base + 2 * day) == base + 3 * day   # exact boundary
+    mid = base + int(2.5 * day)
+    assert _nx(base, day, mid) == base + 3 * day              # partial period
+    print("[21d] scheduler catch-up OK (downtime fires ONCE late-tagged, next "
+          "on a whole period boundary strictly in the future)")
+
+    from bot.plugins.notes import _safe_media_name
+    assert _safe_media_name("../../etc/cron.d/evil") == "evil"
+    assert _safe_media_name("../../../evil.bin") == "evil.bin"
+    assert _safe_media_name("/abs/path/x.jpg") == "x.jpg"
+    assert _safe_media_name(None) == "note.bin"
+    assert _safe_media_name("") == "note.bin"
+    assert _safe_media_name("normal.pdf") == "normal.pdf"
+    print("[21e] notes media path sanitization OK (traversal attempts collapse "
+          "to a bare filename)")
+
+    app_probe = BotApp(None, {})
+    for i in range(1, 3002):        # ids 1..3001 — id 0 is a falsy no-op by design
+        app_probe.mark_bot_sent(i)
+    assert len(app_probe._sent_ids) <= 1501
+    assert 3001 in app_probe._sent_ids and 3000 in app_probe._sent_ids  # newest kept
+    assert 1 not in app_probe._sent_ids and 100 not in app_probe._sent_ids  # oldest gone
+    assert app_probe.is_bot_sent(3001) and not app_probe.is_bot_sent(1)
+    print("[21f] bot-sent id tracking OK (dict-based: newest 1500 survive the "
+          "trim deterministically, oldest dropped)")
 
     print("\n✅ SELFTEST: ALL PASS")
 
