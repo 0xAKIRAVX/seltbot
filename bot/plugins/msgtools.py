@@ -173,7 +173,11 @@ async def info_cmd(app, ev, arg):
     if target is not None and getattr(target, "first_name", None) is not None:
         full = ""
         try:
-            u = await app.client(functions.users.GetFullUserRequest(id=target.id))
+            # v2.8.0: raw API needs an InputUser, not a bare int — the old
+            # GetFullUserRequest(id=target.id) failed at serialization, so the
+            # bio line in .info was ALWAYS silently blank.
+            ent = await app.client.get_input_entity(target.id)
+            u = await app.client(functions.users.GetFullUserRequest(id=ent))
             full = getattr(u.full_user, "about", "") or ""
         except Exception:
             pass
@@ -237,8 +241,11 @@ async def common_cmd(app, ev, arg):
         await ev.reply("❌ روی پیام کاربر ریپلای کن.")
         return
     try:
+        # v2.8.0: InputUser resolution (raw int used to fail serialization →
+        # .common always answered with an error).
+        ent = await app.client.get_input_entity(reply.sender_id)
         res = await app.client(functions.messages.GetCommonChatsRequest(
-            user_id=reply.sender_id, max_id=0, limit=50))
+            user_id=ent, max_id=0, limit=50))
         names = [getattr(c, "title", "?") for c in res.chats]
         await ev.reply("👥 گروه‌های مشترک:\n" + ("\n".join("• " + n for n in names[:30])
                                                 if names else "—"))
