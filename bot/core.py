@@ -41,7 +41,10 @@ _RE_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+|tg://[^\s)]+)\)")
 
 
 def md2html(text):
-    t = _htmlmod.escape(str(text if text is not None else ""), quote=False)
+    # v2.7.2: quote=True — a crafted link like [x](https://a"onmouseover=…)
+    # could previously break out of the href attribute (Bot API would then
+    # reject the message and it silently degraded to plain text).
+    t = _htmlmod.escape(str(text if text is not None else ""), quote=True)
     # links first (before other markers could eat the brackets)
     t = _RE_LINK.sub(r'<a href="\2">\1</a>', t)
     t = _RE_STRIKE.sub(r"<s>\1</s>", t)
@@ -507,6 +510,16 @@ class BotApp:
                 raise RuntimeError("SESSION DEAD")
         self.session_str = session_to_use
         self.me = await self.client.get_me()
+        # v2.7.2 CRITICAL: types.User carries NO `about` field (bio lives only
+        # in users.getFullUser) — the old `getattr(self.me, "about")` was
+        # ALWAYS None, so the real bio was archived as "" and `.clock bio off`
+        # / `.restore` would silently WIPE the owner's actual bio.
+        try:
+            _full = await self.client(functions.users.GetFullUserRequest(
+                id=[types.InputUserSelf()]))
+            self.me_about = getattr(_full.full_user, "about", None) or ""
+        except Exception:
+            self.me_about = ""
         try:
             self.session_str = self.client.session.save()  # capture post-migration string
         except Exception:
@@ -527,7 +540,35 @@ class BotApp:
         if self.db.setting("clock_first_base") is None:
             self.db.set_setting("clock_first_base", self.me.first_name or "")
         if self.db.setting("clock_bio_base") is None:
-            self.db.set_setting("clock_bio_base", (getattr(self.me, "about", None) or ""))
+            self.db.set_setting("clock_bio_base", self.me_about)
+        # v2.7.2 — keep the bases FRESH for fields the clock does not currently
+        # own (or when the clock is off entirely). Before, the bases were
+        # captured once on FIRST boot and never updated: a manual rename made
+        # afterwards meant `.restore` resurrected an ANCIENT name. We only
+        # refresh when the live value does NOT look like our clock text (so a
+        # silent reset by Telegram never poisons the base with clock glyphs).
+        from .plugins.clock import looks_like_clock as _looks_clock
+        tgt = ("first_name" if self.db.setting("clock_target") == "first_name"
+               else "last_name")
+        clock_on = bool(self.db.setting("clock_on", True))
+        if tgt != "first_name":
+            cur_first = self.me.first_name or ""
+            if cur_first != (self.db.setting("clock_first_base") or "") \
+                    and not _looks_clock(cur_first, self):
+                self.db.set_setting("clock_first_base", cur_first)
+                log.info("clock_first_base refreshed (manual rename?)")
+        if tgt != "last_name" or not clock_on:
+            cur_last = self.me.last_name or ""
+            if cur_last != (self.db.setting("clock_name_base") or "") \
+                    and not _looks_clock(cur_last, self):
+                self.db.set_setting("clock_name_base", cur_last)
+                log.info("clock_name_base refreshed (manual rename?)")
+        if not bool(self.db.setting("clock_bio_on", False)):
+            cur_bio = self.me_about
+            if cur_bio != (self.db.setting("clock_bio_base") or "") \
+                    and not _looks_clock(cur_bio, self):
+                self.db.set_setting("clock_bio_base", cur_bio)
+                log.info("clock_bio_base refreshed (manual edit?)")
         # v2.7 one-shot: the owner asked for the matrix clock («فونت ماتریسی
         # متحرک») with this very deploy — enable it on the first v2.7 boot.
         # Guarded by a flag: if the owner later turns it OFF it stays off
