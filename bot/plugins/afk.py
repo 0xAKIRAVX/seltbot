@@ -127,6 +127,11 @@ async def afk_cmd(app, ev, arg):
 async def unafk_cmd(app, ev, arg):
     st = _state(app)
     if not st.get("active"):
+        # v2.7.2: the outgoing hook already processed the auto-return seconds
+        # ago (any message from the owner deactivates AFK) — stay silent
+        # instead of contradicting the “خوش برگشتی” note that just went out.
+        if time.time() - float(st.get("last_return") or 0) < 60:
+            return
         await ev.reply("AFK که فعال نیست 🙂")
         return
     await _return(app, ev, st)
@@ -166,9 +171,23 @@ async def afktext_cmd(app, ev, arg):
 async def _return(app, ev, st):
     dur = jalali.fmt_dur(time.time() - st.get("since", time.time()), fa=app.fa)
     hits = st.get("hits", 0)
-    _set(app, {"active": False, "since": 0, "reason": "", "hits": 0})
-    await ev.reply(f"👋 خوش برگشتی! AFK بود: {dur} • {hits} جواب خودکار فرستادم."
-                   if app.fa else f"👋 Welcome back! AFK {dur} • {hits} auto-replies.")
+    # v2.7.2: last_return lets `.unafk` know the outgoing hook already
+    # greeted moments ago (any owner message auto-returns AFK) — before,
+    # unafk then ALSO replied “AFK که فعال نیست” — contradictory double reply.
+    _set(app, {"active": False, "since": 0, "reason": "", "hits": 0,
+               "last_return": time.time()})
+    text = (f"👋 خوش برگشتی! AFK بود: {dur} • {hits} جواب خودکار فرستادم."
+            if app.fa else f"👋 Welcome back! AFK {dur} • {hits} auto-replies.")
+    # v2.7.2: ev=None means the auto-return was triggered by the owner simply
+    # TYPING somewhere — the greeting goes to Saved Messages ONLY. Replying
+    # into that chat leaked “خوش برگشتی” into groups in front of everyone.
+    if ev is not None:
+        await ev.reply(text)
+    else:
+        try:
+            await app.send_saved("💤 " + text)
+        except Exception:
+            log.exception("afk return note failed")
 
 
 @incoming_hook()
@@ -241,7 +260,9 @@ async def afk_outgoing(app, event):
     if not st.get("active"):
         return False
     try:
-        await _return(app, event, st)
+        # v2.7.2: pass ev=None — the owner may be typing in a GROUP; the
+        # “welcome back” note must land in Saved Messages, never in that chat.
+        await _return(app, None, st)
     except Exception:
         log.exception("afk auto-return failed")
     return False
