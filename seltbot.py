@@ -758,6 +758,134 @@ def selftest():
           "phase/days tokens, since parser jalali+greg+fa, matrix name with "
           "katakana rain still clock-detected by static regex)")
 
+    # [20] v2.7.2 — the great bug-hunt (selfbot + bot + installer):
+    #  A) chat: rules never matched supergroups (one-sided '-' strip);
+    #  B) bio rotation ignored biorotate_every (rotated every 5 MINUTES);
+    #  C) AFK auto-return greeted into whatever chat the owner typed in
+    #     (group leak) + .unafk double reply;
+    #  D) verify() fought MANUAL renames of fields the clock doesn't own.
+    from bot.plugins import rules as rulesmod, bio as biomod
+    from telethon.tl import functions as _tlfn, types as _tltp
+
+    bc = rulesmod._bare_chat_id
+    assert bc(-1001234567890) == 1234567890, bc(-1001234567890)
+    assert bc("-1001234567890") == 1234567890
+    assert bc(-1234) == 1234 and bc("1234") == 1234
+    assert bc("garbage") is None and bc(None) is None
+
+    class _ChatEv:
+        chat_id = -1001234567890
+
+    row = {"trig": "chat", "tval": "-1001234567890"}
+    assert rulesmod._trig_match(None, row, "", "", None, _ChatEv(), None)
+    row2 = {"trig": "chat", "tval": "1234567890"}       # bare id pasted
+    assert rulesmod._trig_match(None, row2, "", "", None, _ChatEv(), None)
+    row3 = {"trig": "chat", "tval": "-999000"}           # different chat
+    assert not rulesmod._trig_match(None, row3, "", "", None, _ChatEv(), None)
+
+    class _BioShim:
+        def __init__(self, kv): self.kv = kv
+        def s(self, k, d=None): return self.kv.get(k, d)
+    assert biomod._rotate_interval(_BioShim({})) == 3600
+    assert biomod._rotate_interval(_BioShim({"biorotate_every": 240})) == 14400
+    assert biomod._rotate_interval(_BioShim({"biorotate_every": 5})) == 3600   # clamped
+    assert biomod._rotate_interval(_BioShim({"biorotate_every": "junk"})) == 3600
+
+    class _AfkDB:
+        def __init__(self): self.kv = {}
+        def setting(self, k, d=None): return self.kv.get(k, d)
+        def set_setting(self, k, v): self.kv[k] = v
+
+    class _AfkApp:
+        fa = True
+        def __init__(self):
+            self.db = _AfkDB()
+            self.saved = []
+        async def send_saved(self, text):
+            self.saved.append(text)
+
+    a1 = _AfkApp()
+    a1.db.kv["afk"] = {"active": True, "since": time.time() - 600,
+                       "reason": "", "hits": 3}
+    asyncio.run(afkmod._return(a1, None, dict(a1.db.kv["afk"])))
+    assert a1.saved and "خوش برگشتی" in a1.saved[0], a1.saved
+    assert "AFK بود" in a1.saved[0]
+    st_after = a1.db.kv["afk"]
+    assert st_after["active"] is False and st_after.get("last_return", 0) > 0
+
+    class _Ev:
+        def __init__(self): self.replied = None
+        async def reply(self, text): self.replied = text
+
+    a2 = _AfkApp()
+    a2.db.kv["afk"] = {"active": True, "since": time.time() - 60,
+                       "reason": "", "hits": 0}
+    ev2 = _Ev()
+    asyncio.run(afkmod._return(a2, ev2, dict(a2.db.kv["afk"])))
+    assert ev2.replied and not a2.saved            # explicit unafk → reply, no leak
+
+    class _VerifyDB:
+        def __init__(self, kv): self.kv = kv
+        def setting(self, k, d=None): return self.kv.get(k, d)
+        def set_setting(self, k, v): self.kv[k] = v
+
+    class _VerifyApp:
+        def __init__(self, kv, user, about):
+            self.db = _VerifyDB(kv)
+            self.user = user
+            self.about = about
+            self.profiles = []
+        def s(self, k, d=None):
+            return self.db.setting(k, d)
+        def now(self):
+            return datetime.datetime.now(ZoneInfo("Asia/Tehran"))
+        async def client(self, request):
+            if isinstance(request, _tlfn.users.GetUsersRequest):
+                return [self.user]
+            if isinstance(request, _tlfn.users.GetFullUserRequest):
+                import types as _pytypes
+                return _pytypes.SimpleNamespace(
+                    full_user=_pytypes.SimpleNamespace(about=self.about))
+            if isinstance(request, _tlfn.account.UpdateProfileRequest):
+                self.profiles.append((request.first_name, request.last_name,
+                                      request.about))
+                return True
+            return True
+
+    import types as _pytypes
+    fake_user = _pytypes.SimpleNamespace(first_name="F", last_name="MANUAL")
+    kv = {"clock_expected": {"last_name": "OLD", "bio": "b"},
+          "clock_on": False, "clock_bio_on": True, "clock_target": "last_name"}
+    va = _VerifyApp(kv, fake_user, "b")
+    gov_a = ProfileGovernor(va)
+    asyncio.run(gov_a.verify())
+    assert va.profiles == [] and gov_a.strikes == [], (va.profiles, gov_a.strikes)
+
+    # same live values but the clock OWNS the name → manual "MANUAL" rename is
+    # correctly detected as a silent reset and re-applied as "OLD"
+    kv2 = {"clock_expected": {"last_name": "OLD", "bio": "b"},
+           "clock_on": True, "clock_bio_on": False, "clock_target": "last_name"}
+    vb = _VerifyApp(kv2, fake_user, "b")
+    gov_b = ProfileGovernor(vb)
+    asyncio.run(gov_b.verify())
+    assert len(vb.profiles) == 1 and vb.profiles[0][1] == "OLD", vb.profiles
+    assert gov_b.strikes, "silent reset must strike when the clock owns the field"
+
+    # bio-mismatch path: full-user about now feeds the comparison (was always
+    # "" before v2.7.2 → fake strikes every 5 minutes)
+    kv3 = {"clock_expected": {"last_name": "MANUAL", "bio": "WANT"},
+           "clock_on": True, "clock_bio_on": True, "clock_target": "last_name"}
+    vc = _VerifyApp(kv3, fake_user, "OTHER")
+    gov_c = ProfileGovernor(vc)
+    asyncio.run(gov_c.verify())
+    assert len(vc.profiles) == 1 and vc.profiles[0][2] == "WANT", vc.profiles
+    print("[20] v2.7.2 OK (chat-id rules match supergroups; bio rotation honors"
+          " ≥60min setting & stands down for the bio clock; AFK return goes to"
+          " Saved Messages — never leaks into groups; verify() patrols only the"
+          " fields the clock owns AND reads the bio from getFullUser — the User"
+          " object never carries `about`, which used to cause fake bio-resets"
+          " every 5 minutes and archived the real bio as empty)")
+
     print("\n✅ SELFTEST: ALL PASS")
 
 
