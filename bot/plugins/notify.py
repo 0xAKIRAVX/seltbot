@@ -2,7 +2,7 @@
 import logging
 import time
 
-from ..core import command, incoming_hook
+from ..core import as_int, command, incoming_hook
 
 log = logging.getLogger("seltbot.notify")
 
@@ -39,7 +39,8 @@ async def notify_incoming(app, event):
                 pass
     if not hit and not mentioned:
         return False
-    if not app.limiter.allow(("notify", event.chat_id), int(app.s("notify_throttle", 600))):
+    if not app.limiter.allow(("notify", event.chat_id),
+                             as_int(app.s("notify_throttle", 600), 600, 30, 86400)):
         return False
     try:
         chat = await event.get_chat()
