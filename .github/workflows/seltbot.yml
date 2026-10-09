@@ -39,7 +39,12 @@ jobs:
         run: pip install telethon aiohttp requests tzdata
 
       - name: Install optional dependencies (best effort)
-        run: pip install qrcode pypng ddgs || echo "::warning::optional deps skipped (qr/web search degraded)"
+        run: |
+          # v2.8.0: split installs — a flaky `ddgs` publish used to take qrcode
+          # + pypng down with it (all-or-nothing single pip call), degrading
+          # the QR generator for no reason.
+          pip install qrcode pypng || echo "::warning::qr deps skipped"
+          pip install ddgs || echo "::warning::web-search dep skipped"
 
       - name: Run SeltBot (shift ≈ 5h45m)
         id: bot
