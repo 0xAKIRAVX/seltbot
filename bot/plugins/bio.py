@@ -27,12 +27,35 @@ async def stop(app):
         _task.cancel()
 
 
+def _rotate_interval(app):
+    """v2.7.2: seconds between bio rotations. The old loop slept a HARDCODED
+    300s and rotated every ~5 minutes (12 profile writes/hour — a real ban
+    risk) while completely ignoring the `biorotate_every` setting (min 60
+    minutes) the command promised. Now the setting is the truth, clamped
+    to >= 60 minutes."""
+    try:
+        m = int(app.s("biorotate_every", 60) or 60)
+    except Exception:
+        m = 60
+    return max(60, m) * 60
+
+
 async def _rotate_loop(app):
     while not app.stopping:
         try:
             await asyncio.sleep(300)
             if app.stopping or not app.s("biorotate_on", False):
                 continue
+            # v2.7.2: never fight the bio clock — when clock_bio_on owns the
+            # bio, rotation must stand down completely (they used to overwrite
+            # each other every minute).
+            if app.s("clock_bio_on", False):
+                continue
+            every = _rotate_interval(app)
+            now = time.time()
+            if now - float(app.s("bio_rotate_last", 0) or 0) < every:
+                continue
+            app.sets("bio_rotate_last", now)
             presets = app.s("bio_presets", []) or []
             if len(presets) < 2:
                 continue
@@ -48,8 +71,15 @@ async def _rotate_loop(app):
 @command("bio", "bio", "[متن]", "تنظیم/نمایش بیو", "Set/show bio", bot_ok=True)
 async def bio_cmd(app, ev, arg):
     if not arg.strip():
-        me = await app.client(functions.users.GetUsersRequest(id=[types.InputUserSelf()]))
-        cur = (getattr(me[0], "about", "") or "") if me else ""
+        # v2.7.2: bio is NOT on types.User — read it via getFullUser (the old
+        # GetUsersRequest peek always showed "—" even when a bio existed).
+        cur = ""
+        try:
+            full = await app.client(functions.users.GetFullUserRequest(
+                id=[types.InputUserSelf()]))
+            cur = getattr(full.full_user, "about", "") or ""
+        except Exception:
+            pass
         await ev.reply(f"📝 بیوی فعلی: {cur or '—'}\n(متن جدید رو بفرست: `.bio متن`)")
         return
     ok, _, why = await app.gov.apply("bio", arg.strip()[:139], force=True)
