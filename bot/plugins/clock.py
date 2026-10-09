@@ -570,8 +570,12 @@ async def clock_cmd(app, ev, arg):
     elif sub in ("off", "pause"):
         app.sets("clock_on", False)
         if sub == "off":
-            base = app.s("clock_name_base", "") or ""
-            await app.gov.apply(_target_field(app), base or None, force=True)
+            # v2.7.2: pass the base AS-IS — an EMPTY base must be written as ""
+            # to actually CLEAR the clock text. The old `base or None` hit the
+            # governor's "keep" branch and the clock stayed on the profile
+            # forever (this owner's original last_name IS empty!).
+            base = str(app.s("clock_name_base", "") or "")
+            await app.gov.apply(_target_field(app), base, force=True)
         await ev.reply("⏸ ساعت متوقف شد." if app.fa else "⏸ Clock paused.")
     elif sub == "resume":
         app.sets("clock_on", True)
@@ -614,11 +618,20 @@ async def clock_cmd(app, ev, arg):
         app.sets("tz", rest)
         await ev.reply(f"✅ منطقهٔ زمانی: {rest}")
     elif sub == "target":
-        if rest in ("first", "firstname", "اسم", "first_name"):
-            app.sets("clock_target", "first_name")
-        else:
-            app.sets("clock_target", "last_name")
-        await ev.reply(f"✅ ساعت روی {'اسم اول' if rest.startswith('first') else 'اسم آخر'} می‌شینه")
+        new = ("first_name" if rest in ("first", "firstname", "اسم", "first_name")
+               else "last_name")
+        if new != _target_field(app):
+            # v2.7.2: switching the target must CLEAR the clock text from the
+            # OLD field (restore its base) — before, the old field kept showing
+            # a frozen clock next to the new one. Reply also follows the REAL
+            # target now («.clock target اسم» used to say “اسم آخر”).
+            app.sets("clock_target", new)
+            old = "last_name" if new == "first_name" else "first_name"
+            old_base = str(app.s("clock_first_base" if old == "first_name"
+                                 else "clock_name_base", "") or "")
+            await app.gov.apply(old, old_base, force=True)
+            _next_name = 0
+        await ev.reply(f"✅ ساعت روی {'اسم اول' if _target_field(app) == 'first_name' else 'اسم آخر'} می‌شینه")
     elif sub == "digits":
         await _clock_digits(app, ev, rest)
     elif sub == "prefix":
@@ -812,8 +825,10 @@ async def _clock_bio(app, ev, rest):
         await ev.reply("🕐 ساعت در بیو روشن شد (بیوی اصلیت backup گرفته شد).")
     elif sub in ("off",):
         app.sets("clock_bio_on", False)
-        base = app.s("clock_bio_base", "") or ""
-        await app.gov.apply("bio", base or None, force=True)
+        # v2.7.2: same empty-base fix as `.clock off` — write "" (not None)
+        # so an originally-empty bio really gets cleared.
+        base = str(app.s("clock_bio_base", "") or "")
+        await app.gov.apply("bio", base, force=True)
         await ev.reply("⏸ ساعت بیو خاموش شد و بیوی اصلی برگشت.")
     elif sub == "text":
         if not arg:
@@ -868,7 +883,9 @@ async def restore_cmd(app, ev, arg):
     # did NOTHING and the clock text stayed on the profile forever.
     # An empty string is a valid, writable value for last_name/about.
     await app.gov.apply("last_name", base_name, force=True)
-    await app.gov.apply("first_name", app.s("clock_first_base", "") or None, force=True)
+    # v2.7.2: first_name had the same latent bug (`or None` → governor "keep"
+    # when the original first_name was empty) — write the string AS-IS now.
+    await app.gov.apply("first_name", str(app.s("clock_first_base", "") or ""), force=True)
     await app.gov.apply("bio", base_bio, force=True)
     app.dels("clock_expected")
     await ev.reply("↩️ اسم و بیو به حالت اصلی برگشت. (برای روشن کردن دوباره: .clock on)")
