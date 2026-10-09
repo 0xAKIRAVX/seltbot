@@ -26,7 +26,7 @@ from collections import deque
 
 from telethon.tl import functions, types
 
-from ..core import command, incoming_hook
+from ..core import as_int, command, incoming_hook
 
 log = logging.getLogger("seltbot.rules")
 
@@ -115,7 +115,7 @@ async def antispam_incoming(app, event):
     dq.append(now)
     while dq and now - dq[0] > 10:
         dq.popleft()
-    burst = max(3, int(app.s("antispam_burst", 8)))
+    burst = max(3, as_int(app.s("antispam_burst", 8), 8, 3, 100))
     if len(dq) > burst:
         _jailed[key] = now + 120
     if not (_jailed.get(key, 0) > now):
@@ -147,7 +147,7 @@ def _hour_used(app):
     if _hour_counter["hour"] != h:
         _hour_counter.update(hour=h, n=0)
     _hour_counter["n"] += 1
-    return _hour_counter["n"] <= max(3, int(app.s("rules_max_per_hour", 25)))
+    return _hour_counter["n"] <= max(3, as_int(app.s("rules_max_per_hour", 25), 25, 3, 1000))
 
 
 def _media_match(kind, msg, low):
