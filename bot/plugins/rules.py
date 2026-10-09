@@ -169,6 +169,23 @@ def _media_match(kind, msg, low):
     }.get(kind, False)
 
 
+def _bare_chat_id(x):
+    """v2.7.2: normalize any chat-id style to the bare positive id.
+    Telethon reports supergroups/channels as -100XXXXXXXXXX and basic groups
+    as -XXXXX; users paste ids copied from `.id` (same style) or from Bot-API
+    docs (also -100…). The old match compared `str(chat_id)` against
+    `value.lstrip('-')` — the minus was stripped from ONE side only, so a
+    `chat:-1001234` rule NEVER matched. Bare ids compare correctly for all
+    styles."""
+    try:
+        n = abs(int(str(x).strip()))
+    except (TypeError, ValueError):
+        return None
+    if n > 1000000000000:          # -100XXXXXXXXXX prefix
+        n -= 1000000000000
+    return n
+
+
 def _trig_match(app, r, text, low, sender, event, msg):
     t, v = r["trig"], r["tval"]
     if t == "kw":
@@ -184,7 +201,10 @@ def _trig_match(app, r, text, low, sender, event, msg):
         un = (getattr(sender, "username", None) or "").lower()
         return (sid and sid == v) or (un and un == v)
     if t == "chat":
-        return str(event.chat_id or "") == v.lstrip("-")
+        a, b = _bare_chat_id(event.chat_id), _bare_chat_id(v)
+        if a is not None and b is not None:
+            return a == b
+        return str(event.chat_id or "") == v
     if t == "media":
         return _media_match(v.lower(), msg, low)
     return False
