@@ -10,7 +10,7 @@ import re
 import time
 
 from .. import jalali
-from ..core import command
+from ..core import as_int, command
 
 log = logging.getLogger("seltbot.clock")
 
@@ -507,7 +507,11 @@ async def _loop(app):
                         _target_field(app), lambda: _render_name(app),
                         force=_force_name)
                     _last_why = why
-                    iv = max(app.gov.min_gap(), int(app.s("clock_interval", 60)))
+                    # v2.8.0: as_int — a junk clock_interval (stored before
+                    # validation existed) must never kill the loop with
+                    # ValueError on every tick.
+                    iv = max(app.gov.min_gap(),
+                             as_int(app.s("clock_interval", 60), 60, 5, 7200))
                     _next_name, _force_name = _next_after(now, why, iv, retry, off)
                     # v2.4.1 THE phone-sync fix: a mid-minute write (boot,
                     # .clock on/text/prefix change, reconnect) leaves <60s to
@@ -525,7 +529,7 @@ async def _loop(app):
                     text_fn = (lambda: _render_bio(app))
                     ok, retry, why = await app.gov.apply("bio", text_fn,
                                                          force=_force_bio)
-                    iv = max(60, int(app.s("clock_bio_interval", 60)))
+                    iv = max(60, as_int(app.s("clock_bio_interval", 60), 60, 60, 86400))
                     _next_bio, _force_bio = _next_after(now, why, iv, retry, off)
                     if why == "ok" and app.gov.healthy() \
                             and _next_bio - now < app.gov.effective_interval("bio"):
