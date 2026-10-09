@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#050b06">
+<title>SeltBot Installer — نصب خودکار سلف‌بات</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon128.png">
+</head>
+<body>
+
+<canvas id="rain"></canvas>
+
+<div id="wrap">
+
+  <!-- ═══════════ INTRO ═══════════ -->
+  <section class="screen" id="sc-intro">
+    <div class="logo">Selt<span>Bot</span></div>
+    <div class="tagline">نصب خودکار سلف‌بات تلگرام</div>
+    <div class="hero-demo" id="hero-demo">◐｜ ﾊﾐﾋｰｼ 𝟶𝟯:𝟦𝟧 ｜ ▓▓▓▓▓░░░░░░░</div>
+    <div class="card">
+      <div class="card-title">✨ چی برات می‌سازم؟</div>
+      <ul class="feat">
+        <li>🕐 <b>ساعت زندهٔ ماتریسی</b> کنار اسمت — هر دقیقه بارون کد می‌لغزه</li>
+        <li>🤖 <b>بات مدیریت</b> — منوی فارسی، تنظیم ساعت، AFK، یادآور، نوت‌ها…</li>
+        <li>♾ <b>آنلاین ۲۴/۷</b> روی سرور گیت‌هاب — رایگان، بدون نیاز به گوشی روشن</li>
+      </ul>
+      <div class="card-title" style="margin-top:18px">🎒 چی لازم داری؟</div>
+      <ul class="feat">
+        <li>📱 اکانت تلگرام (که الان داری ✓)</li>
+        <li>🐙 اکانت <a href="https://github.com/signup" target="_blank" rel="noopener">گیت‌هاب</a> — رایگان</li>
+        <li>⏱ حدود ۱۰ دقیقه وقت</li>
+      </ul>
+      <div class="note">🔒 همه‌چیز روی حساب‌های خودت انجام می‌شه؛ رمزها فقط بین همین گوشی و گیت‌هاب خودت رد و بدل می‌شه — هیچ سرور واسطی وسط نیست.</div>
+      <div id="resume-box" class="okbox hidden" style="text-align:right">
+        <div id="resume-txt"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn primary" id="resume-go" style="margin-top:0">ادامهٔ نصب ◀</button>
+          <button class="btn ghost" id="resume-no" style="margin-top:0">از اول</button>
+        </div>
+      </div>
+      <button class="btn primary big" id="btn-start">شروع نصب ◀</button>
+    </div>
+    <div class="foot">SeltBot Installer v1.1 — ساخته‌شده برای رفقا 🖤</div>
+  </section>
+
+  <!-- ═══════════ STEP 1 — GITHUB ═══════════ -->
+  <section class="screen hidden" id="sc-gh">
+    <div class="stepper" id="stepper"></div>
+    <div class="card">
+      <div class="card-title">🐙 مرحلهٔ ۱ — اتصال به گیت‌هاب</div>
+      <p class="lead">سلف‌بات روی <b>GitHub Actions</b> اجرا می‌شه — رایگان و ۲۴ ساعته. برای این کار یه «توکن دسترسی» می‌خوایم:</p>
+      <ol class="steps-guide">
+        <li>روی دکمهٔ زیر بزن تا صفحهٔ ساخت توکن باز بشه (دسترسی‌هاش خودکار انتخاب شده)</li>
+        <li>ته صفحه روی <b>Generate token</b> کلیک کن</li>
+        <li>کدی که سبزه (<code>ghp_…</code>) رو کپی کن و اینجا بذار</li>
+      </ol>
+      <a class="btn ghost wide" href="https://github.com/settings/tokens/new?scopes=repo,workflow&description=SeltBot%20Installer" target="_blank" rel="noopener">🔓 ساخت توکن در گیت‌هاب</a>
+      <label class="field">
+        <span>توکن دسترسی</span>
+        <input id="in-pat" type="password" dir="ltr" autocomplete="off" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" spellcheck="false">
+      </label>
+      <div class="toggle-eye" id="toggle-pat">👁 نمایش</div>
+      <button class="btn primary" id="btn-gh-check">بررسی و ادامه ◀</button>
+      <div class="status" id="st-gh"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ STEP 2 — REPO ═══════════ -->
+  <section class="screen hidden" id="sc-repo">
+    <div class="stepper"></div>
+    <div class="card">
+      <div class="card-title">📦 مرحلهٔ ۲ — ساخت مخزن</div>
+      <p class="lead">یه کپی از سلف‌بات روی اکانت گیت‌هابت می‌سازم و اجرای خودکارش (Actions) رو فعال می‌کنم.</p>
+      <div class="plan-box" id="pb-repo">
+        <div class="plan-row" data-k="check"><span class="ic">🔎</span><span class="tx">بررسی مخزن موجود</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="fork"><span class="ic">🍴</span><span class="tx">Fork کردن سلف‌بات</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="wait"><span class="ic">⏳</span><span class="tx">انتظار برای آماده‌شدن</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="act"><span class="ic">⚡</span><span class="tx">فعال‌سازی Actions</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="clean"><span class="ic">🧹</span><span class="tx">پاک‌سازی state قدیمی</span><span class="dot"></span></div>
+      </div>
+      <button class="btn primary" id="btn-repo">ساخت مخزن ◀</button>
+      <div class="status" id="st-repo"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ STEP 3 — TELEGRAM LOGIN ═══════════ -->
+  <section class="screen hidden" id="sc-tg">
+    <div class="stepper"></div>
+    <div class="card">
+      <div class="card-title">📱 مرحلهٔ ۳ — ورود به تلگرام</div>
+      <p class="lead">با اکانت خودت وارد می‌شم تا «کلید نشست» ساخته بشه — همون چیزی که سلف‌بات باهاش به‌جای تو آنلاین می‌مونه.</p>
+
+      <div id="tg-phase-phone">
+        <label class="field">
+          <span>شمارهٔ تلگرام</span>
+          <input id="in-phone" type="tel" dir="ltr" inputmode="tel" autocomplete="off" placeholder="+98912xxxxxxx" spellcheck="false">
+        </label>
+        <button class="btn primary" id="btn-tg-send">ارسال کد ورود ◀</button>
+        <div class="note tiny">🌐 اتصال مستقیم به سرور تلگرام — رمز و کد به هیچ جای دیگه نمی‌ره.</div>
+      </div>
+
+      <div id="tg-phase-code" class="hidden">
+        <div class="okbox">📩 کد ورود به تلگرامت فرستاده شد (به اپ جدیدی که لاگینه — نه SMS).</div>
+        <label class="field">
+          <span>کد ۵ رقمی</span>
+          <input id="in-code" type="text" dir="ltr" inputmode="numeric" maxlength="5" autocomplete="one-time-code" placeholder="•••••" class="code-input">
+        </label>
+        <button class="btn primary" id="btn-tg-code">تأیید کد ◀</button>
+        <button class="btn ghost" id="btn-tg-rephone">↩ شماره رو عوض می‌کنم</button>
+      </div>
+
+      <div id="tg-phase-pass" class="hidden">
+        <div class="okbox">🔐 اکانتت رمز دوم (۲FA) داره.</div>
+        <label class="field">
+          <span>رمز دوم تلگرام</span>
+          <input id="in-pass" type="password" dir="ltr" autocomplete="off" placeholder="••••••••">
+        </label>
+        <button class="btn primary" id="btn-tg-pass">ورود ◀</button>
+      </div>
+
+      <div id="tg-phase-done" class="hidden">
+        <div class="okbox big" id="tg-me-line">✅</div>
+        <div class="note tiny" id="tg-id-line"></div>
+        <button class="btn primary" id="btn-tg-next">مرحلهٔ بعد ◀</button>
+      </div>
+
+      <div class="status" id="st-tg"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ STEP 4 — BOTFATHER ═══════════ -->
+  <section class="screen hidden" id="sc-bf">
+    <div class="stepper"></div>
+    <div class="card">
+      <div class="card-title">🤖 مرحلهٔ ۴ — بات مدیریت</div>
+      <p class="lead">یه بات شخصی می‌سازم که سلف‌باتت رو از تلگرام کنترل کنی — منو فارسی، دکمه‌ها، همه‌چیز. با <b>BotFather</b> خودکار ساخته می‌شه.</p>
+
+      <div id="bf-auto">
+        <label class="field">
+          <span>نمایشی بات</span>
+          <input id="in-botname" type="text" dir="ltr" value="SeltBot Manager" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>آیدی بات (خودکار تولید می‌شه)</span>
+          <input id="in-botuser" type="text" dir="ltr" placeholder="seltbot_xxxx_bot" spellcheck="false">
+        </label>
+        <button class="btn primary" id="btn-bf-create">ساخت خودکار بات ◀</button>
+        <div class="subtle">یادت باشه بات‌ها عمومی‌ان — هر کسی آیدیش رو داشته باشه می‌تونه پیام بده؛ ولی فقط <b>تو</b> می‌تونی دستور بدی.</div>
+      </div>
+
+      <div id="bf-done" class="hidden">
+        <div class="okbox big" id="bf-line">✅</div>
+        <button class="btn primary" id="btn-bf-next">مرحلهٔ بعد ◀</button>
+      </div>
+
+      <div class="or">— یا —</div>
+      <div class="subtle">اگه قبلاً با BotFather بات ساختی، توکنش رو بذار:</div>
+      <label class="field">
+        <span>توکن بات (اختیاری — دستی)</span>
+        <input id="in-bottoken" type="password" dir="ltr" placeholder="123456:AA..." spellcheck="false">
+      </label>
+      <button class="btn ghost" id="btn-bf-manual">استفاده از این توکن ◀</button>
+      <div class="status" id="st-bf"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ STEP 5 — SECRETS ═══════════ -->
+  <section class="screen hidden" id="sc-sec">
+    <div class="stepper"></div>
+    <div class="card">
+      <div class="card-title">🔑 مرحلهٔ ۵ — نصب تنظیمات</div>
+      <p class="lead">این ۷ تنظیم، رمزنگاری‌شده توی مخزن خودت ذخیره می‌شن — فقط سرور خودت می‌تونه بخونتشون:</p>
+      <div class="plan-box" id="pb-sec">
+        <div class="plan-row" data-k="TELEGRAM_SESSION"><span class="ic">🗝</span><span class="tx">کلید نشست تلگرام</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="API_ID"><span class="ic">🪪</span><span class="tx">شناسهٔ اپ تلگرام</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="API_HASH"><span class="ic">🔒</span><span class="tx">کلید اپ تلگرام</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="OWNER_ID"><span class="ic">👤</span><span class="tx">آیدی عددی خودت (فقط تو دستور بدی)</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="MANAGER_BOT_TOKEN"><span class="ic">🤖</span><span class="tx">توکن بات مدیریت</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="NOTIFY_BOT_TOKEN"><span class="ic">🔔</span><span class="tx">توکن اطلاع‌رسانی</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="STATE_KEY"><span class="ic">🧬</span><span class="tx">کلید رمز state (خودکار ساخته می‌شه)</span><span class="dot"></span></div>
+      </div>
+      <button class="btn primary" id="btn-sec">نصب تنظیمات ◀</button>
+      <div class="status" id="st-sec"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ STEP 6 — LAUNCH ═══════════ -->
+  <section class="screen hidden" id="sc-go">
+    <div class="stepper"></div>
+    <div class="card">
+      <div class="card-title">🚀 مرحلهٔ ۶ — راه‌اندازی</div>
+      <p class="lead">سلف‌باتت رو روشن می‌کنم — اولین بوت ۱ تا ۲ دقیقه طول می‌کشه.</p>
+      <div class="plan-box" id="pb-go">
+        <div class="plan-row" data-k="dispatch"><span class="ic">📣</span><span class="tx">فرمان اجرا</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="run"><span class="ic">🏃</span><span class="tx">شروع سرور</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="boot"><span class="ic">⚙️</span><span class="tx">بوت سلف‌بات</span><span class="dot"></span></div>
+        <div class="plan-row" data-k="verify"><span class="ic">🕐</span><span class="tx">تأیید ساعت زنده</span><span class="dot"></span></div>
+      </div>
+      <button class="btn primary big" id="btn-go">راه‌اندازی سلف‌بات 🚀</button>
+      <a class="btn ghost wide hidden" id="lnk-openbot-go" href="#" target="_blank" rel="noopener">🤖 باز کردن بات مدیریت و زدن START</a>
+      <div class="status" id="st-go"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ SUCCESS ═══════════ -->
+  <section class="screen hidden" id="sc-done">
+    <div class="bigmoji">🎉</div>
+    <div class="card">
+      <div class="card-title" style="text-align:center">سلف‌باتت آنلاین شد!</div>
+      <div class="hero-demo" id="done-clock">…</div>
+      <p class="lead" style="text-align:center" id="done-lead">ساعت الان کنار اسمته — هر دقیقه بارون کدش می‌لغزه 🌧</p>
+      <a class="btn primary big" id="btn-openbot" href="#" target="_blank" rel="noopener">🤖 باز کردن بات مدیریت</a>
+      <div class="note">اولین کاری که بکن: <b>/start</b> بفرست — منوی کامل فارسی برات میاد.</div>
+      <div class="card-title" style="margin-top:18px">⚠️ سه قانون طلایی</div>
+      <ul class="feat">
+        <li>تو <b>Settings → Devices</b> هیچ‌وقت session رو terminate نکن — اون «Telegram Desktop» با IP خارجی که می‌بینی <b>خود سلف‌باته</b>، نفوذگر نیست!</li>
+        <li>تو تب <b>Actions</b> مدام اجرا می‌بینی — طبیعیه؛ هر ~۶ ساعت یه شیفت تازه برای ۲۴/۷ موندن.</li>
+        <li>برای خاموش‌کردن موقت: مخزن → Settings → Actions → <b>Disable</b>. برای برگشتن همون‌جا Enable.</li>
+      </ul>
+      <a class="btn ghost wide" id="btn-repolink" href="#" target="_blank" rel="noopener">📦 مخزن گیت‌هابت</a>
+      <div class="foot" id="done-sub"></div>
+    </div>
+  </section>
+
+</div>
+
+<script src="bundle.js"></script>
+<script src="wizard.js"></script>
+<script src="tgflow.js"></script>
+</body>
+</html>
