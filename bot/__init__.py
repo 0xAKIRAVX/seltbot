@@ -1,2 +1,2 @@
 """SeltBot v2 — modular Telegram self-bot (userbot) core package."""
-__version__ = "2.7.2"
+__version__ = "2.8.0"
