@@ -10,6 +10,14 @@ log = logging.getLogger("seltbot.notes")
 MAX_MEDIA = 256 * 1024  # notes with media ≤256KB (stored in encrypted state)
 
 
+def _safe_media_name(name):
+    """v2.8.0 — basename() the stored media filename. The name came from the
+    ORIGINAL Telegram file (attacker-influenceable string): without this, a
+    crafted `../../evil.bin` stored in a note could make the #key expansion
+    or .get write OUTSIDE data/downloads."""
+    return os.path.basename(str(name or "note.bin")) or "note.bin"
+
+
 @outgoing_hook()
 async def notes_expand(app, event):
     if app.module_off("notes"):
@@ -25,7 +33,8 @@ async def notes_expand(app, event):
     try:
         if row["media"]:
             data = base64.b64decode(row["media"])
-            path = os.path.join(app.data_dir, "downloads", row["media_name"] or "note.bin")
+            path = os.path.join(app.data_dir, "downloads",
+                                _safe_media_name(row["media_name"]))
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "wb") as f:
                 f.write(data)
@@ -102,7 +111,8 @@ async def get_cmd(app, ev, arg):
     if row["media"]:
         import os
         data = base64.b64decode(row["media"])
-        path = os.path.join(app.data_dir, "downloads", row["media_name"] or "note.bin")
+        path = os.path.join(app.data_dir, "downloads",
+                            _safe_media_name(row["media_name"]))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
