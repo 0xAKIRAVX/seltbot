@@ -79,14 +79,18 @@ async def autoreply_incoming(app, event):
         return False
     delay = float(app.s("autoreply_delay", 3) or 3)
     await asyncio.sleep(max(0.5, random.uniform(delay * 0.6, delay * 1.4)))
+    sent = False
     try:
         m = await event.reply(body[:3500])
         app.mark_bot_sent(m.id)
+        sent = True
         if matched:
             app.db.reply_hit(matched["id"])
     except Exception:
         log.exception("autoreply failed")
-    return True
+    # v2.7.2: only CONSUME the event when we actually replied — a failed send
+    # must not starve the AFK/notify hooks that run after us in the chain.
+    return sent
 
 
 @command("autoreply", "autoreply", "[on/off/status]",
