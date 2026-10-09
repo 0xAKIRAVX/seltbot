@@ -8,7 +8,7 @@ import time
 
 from telethon.tl import functions, types
 
-from ..core import command
+from ..core import as_int, command
 
 log = logging.getLogger("seltbot.media")
 
@@ -36,7 +36,7 @@ async def _rotate_loop(app):
             await asyncio.sleep(600)
             if app.stopping or not app.s("photos_rotate_on", False):
                 continue
-            every = max(21600, int(app.s("photos_rotate_every_h", 12)) * 3600)
+            every = max(21600, as_int(app.s("photos_rotate_every_h", 12), 12, 6, 24 * 31) * 3600)
             if not app.limiter.allow(("photo_rotate", 0), every):
                 continue
             photos = app.db.photos_all()
