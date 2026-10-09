@@ -68,10 +68,30 @@ async def _run_task(app, t, now):
         log.exception("task %s failed", t["id"])
     finally:
         if t["every"] and t["every"] > 0:
-            app.db.task_next(t["id"], max(now, t["at"] + t["every"]))
+            app.db.task_next(t["id"], _next_occurrence(t["at"], t["every"], now))
         else:
             app.db.task_done(t["id"])
         app.db.commit()
+
+
+def _next_occurrence(at, every, now):
+    """v2.8.0 — next recurrence for a recurring task, WITHOUT re-firing.
+
+    The old `max(now, at + every)` scheduled a task that had drifted far
+    behind (bot down for a day, daily reminder) at exactly `now` → it fired
+    AGAIN on the next 20s scan, un-tagged — the owner got the same reminder
+    twice in half a minute. Correct catch-up: this fire IS the late one (it
+    carries the ⏰ tag); the next one lands on the next whole period boundary
+    strictly in the future."""
+    step = int(every)
+    base = int(at)
+    if now <= base:
+        return base + step
+    periods = int((now - base) // step)
+    nxt = base + (periods + 1) * step
+    while nxt <= now:            # exact-boundary edge safety
+        nxt += step
+    return nxt
 
 
 def _parse_dt(app, s):
