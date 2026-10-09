@@ -23,20 +23,44 @@ _FUNCS = {name: getattr(math, name) for name in
            "floor", "ceil", "fabs", "factorial")}
 _FUNCS.update({"abs": abs, "round": round, "pow": pow, "min": min, "max": max})
 
+# v2.8.0 — resource guards for the sandboxed calculator. The AST whitelist
+# blocked code injection but NOT resource exhaustion: `9**9**9` asks Python
+# for an integer with ~370 MILLION digits → the single-threaded event loop
+# froze for minutes+ → the clock stopped ticking and the whole shift looked
+# dead (self-DoS). These caps make every pathological input fail FAST with a
+# clean Persian error instead. Legit mental-math values are far below them.
+_MAX_OPERAND = 10 ** 15        # any single literal
+_MAX_EXPONENT = 4096           # kills 9**9**9 (exp 387,420,489) and 2**2**2**2
+_MAX_RESULT = 10 ** 4000       # < Python's 4300-digit int→str limit anyway
+_MAX_FACTORIAL = 1500          # 1500! has ~3.8k digits — prints fine
+
 
 def safe_calc(expr):
     def _ev(n):
         if isinstance(n, ast.Expression):
             return _ev(n.body)
         if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            if abs(n.value) > _MAX_OPERAND:
+                raise ValueError("عدد خیلی بزرگ")
             return n.value
         if isinstance(n, ast.BinOp) and type(n.op) in _OPS:
-            return _OPS[type(n.op)](_ev(n.left), _ev(n.right))
-        if isinstance(n, ast.UnaryOp) and type(n.op) in _UOPS:
-            return _UOPS[type(n.op)](_ev(n.operand))
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS:
-            return _FUNCS[n.func.id](*[_ev(a) for a in n.args])
-        raise ValueError("عبارت مجاز نیست")
+            l, r = _ev(n.left), _ev(n.right)
+            if isinstance(n.op, ast.Pow) and (abs(r) > _MAX_EXPONENT or abs(l) > _MAX_OPERAND):
+                raise ValueError("توان بزرگ‌تر از حد مجاز")
+            v = _OPS[type(n.op)](l, r)
+        elif isinstance(n, ast.UnaryOp) and type(n.op) in _UOPS:
+            v = _UOPS[type(n.op)](_ev(n.operand))
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS:
+            if n.func.id == "factorial":
+                arg = n.args[0] if len(n.args) == 1 else None
+                if arg is None or _ev(arg) > _MAX_FACTORIAL:
+                    raise ValueError("فاکتوریل فقط تا ۱۵۰۰")
+            v = _FUNCS[n.func.id](*[_ev(a) for a in n.args])
+        else:
+            raise ValueError("عبارت مجاز نیست")
+        if isinstance(v, (int, float)) and abs(v) > _MAX_RESULT:
+            raise ValueError("نتیجه خیلی بزرگ")
+        return v
     return _ev(ast.parse(expr, mode="eval"))
 
 
