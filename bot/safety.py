@@ -14,6 +14,8 @@ import time
 from telethon.errors import FloodWaitError
 from telethon.tl import functions, types
 
+from .nums import as_int
+
 log = logging.getLogger("seltbot.safety")
 
 TARGETS = ("first_name", "last_name", "bio")
@@ -36,8 +38,8 @@ class ProfileGovernor:
     # ---------- config ----------
     def base_interval(self, target):
         if target == "bio":
-            return max(60, int(self.app.s("clock_bio_interval", 60)))
-        return max(20, int(self.app.s("clock_interval", 60)))
+            return max(60, as_int(self.app.s("clock_bio_interval", 60), 60, 60, 86400))
+        return max(20, as_int(self.app.s("clock_interval", 60), 60, 20, 7200))
 
     def min_gap(self):
         return 15 if self.app.s("clock_accept_risk", False) else 30
@@ -65,7 +67,7 @@ class ProfileGovernor:
             self._budget_day = day
             self._budget_n = 0
             self._notified_budget = False
-        cap = int(self.app.s("safety_daily_updates", 1600))
+        cap = as_int(self.app.s("safety_daily_updates", 1600), 1600, 100, 20000)
         return cap - self._budget_n
 
     def budget_used(self):
@@ -213,7 +215,7 @@ class ProfileGovernor:
             "backoff": round(self.backoff, 2),
             "strikes_1h": len(self.strikes),
             "budget_used": self.budget_used(),
-            "budget_cap": int(self.app.s("safety_daily_updates", 1600)),
+            "budget_cap": as_int(self.app.s("safety_daily_updates", 1600), 1600, 100, 20000),
             "last_name_write": int(now - self.last_ok.get("last_name", 0)) or None,
             "last_bio_write": int(now - self.last_ok.get("about", 0)) or None,
         }
