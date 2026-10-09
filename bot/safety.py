@@ -143,23 +143,51 @@ class ProfileGovernor:
 
     # ---------- silent-reset watchdog ----------
     async def verify(self):
-        """Fresh-read own profile, compare with expected; re-apply on silent reset."""
+        """Fresh-read own profile, compare with expected; re-apply on silent reset.
+
+        v2.7.2: only fields the clock CURRENTLY owns are verified. The old
+        unconditional check misread the owner's MANUAL renames as "silent
+        resets" whenever the name clock was off but e.g. the bio clock still
+        ran — it then re-wrote the OLD value (fighting the user) and piled up
+        strikes that slowed the whole governor down."""
         app = self.app
         exp = app.db.setting("clock_expected", {}) or {}
         if not exp:
             return
+        active = {}
+        try:
+            tgt = ("first_name"
+                   if app.s("clock_target", "last_name") == "first_name"
+                   else "last_name")
+            if app.s("clock_on", True):
+                active[tgt] = True
+            if app.s("clock_bio_on", False):
+                active["bio"] = True
+        except Exception:
+            active = {"first_name": True, "last_name": True, "bio": True}
         try:
             res = await app.client(functions.users.GetUsersRequest(id=[types.InputUserSelf()]))
             u = res[0]
         except Exception:
             return
+        # v2.7.2 CRITICAL: bio is NOT on types.User (it lives in
+        # users.getFullUser). Reading `u.about` always gave "" → every verify
+        # pass with a live bio clock saw a fake mismatch → re-wrote + struck
+        # every 5 minutes. Fetch the full user for the bio comparison.
+        about = None
+        try:
+            full = await app.client(functions.users.GetFullUserRequest(
+                id=[types.InputUserSelf()]))
+            about = getattr(full.full_user, "about", None)
+        except Exception:
+            pass
         mismatch = []
         for api_field, key in (("first_name", "first_name"), ("last_name", "last_name"),
                                ("about", "bio")):
             want = exp.get(key)
-            if want is None:
+            if want is None or key not in active:
                 continue
-            got = getattr(u, api_field, None) or ""
+            got = (about if key == "bio" else getattr(u, api_field, None)) or ""
             if (want or "") != got:
                 mismatch.append((api_field, key, want))
         if not mismatch:
