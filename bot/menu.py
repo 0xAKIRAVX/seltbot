@@ -37,8 +37,8 @@ HR_THIN = "──────────────────"
 
 
 def esc(s):
-    """Escape a dynamic value for parse_mode=HTML."""
-    return _htmlmod.escape(str(s if s is not None else ""), quote=False)
+    """Escape a dynamic value for parse_mode=HTML (quotes too — v2.7.2)."""
+    return _htmlmod.escape(str(s if s is not None else ""), quote=True)
 
 
 def _fa_num(n):
